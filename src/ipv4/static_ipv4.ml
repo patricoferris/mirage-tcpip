@@ -14,22 +14,14 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *)
 
-open Lwt.Infix
-
 let src = Logs.Src.create "ipv4" ~doc:"Mirage IPv4"
 module Log = (val Logs.src_log src : Logs.LOG)
 
 module Make (R: Mirage_random.S) (C: Mirage_clock.MCLOCK) (Ethernet: Ethernet.S) (Arpv4 : Arp.S) = struct
-  module Routing = Routing.Make(Log)(Arpv4)
-
-  (** IO operation errors *)
-  type error = [ Tcpip.Ip.error | `Would_fragment | `Ethif of Ethernet.error ]
-  let pp_error ppf = function
-    | #Tcpip.Ip.error as e -> Tcpip.Ip.pp_error ppf e
-    | `Ethif e -> Ethernet.pp_error ppf e
+  module Routes = Routing.Make(Log)(Arpv4)
 
   type ipaddr = Ipaddr.V4.t
-  type callback = src:ipaddr -> dst:ipaddr -> Cstruct.t -> unit Lwt.t
+  type callback = src:ipaddr -> dst:ipaddr -> Cstruct.t -> unit
 
   let pp_ipaddr = Ipaddr.V4.pp
 
@@ -42,17 +34,18 @@ module Make (R: Mirage_random.S) (C: Mirage_clock.MCLOCK) (Ethernet: Ethernet.S)
   }
 
   let write t ?(fragment = true) ?(ttl = 38) ?src dst proto ?(size = 0) headerf bufs =
-    Routing.destination_mac t.cidr t.gateway t.arp dst >>= function
-    | Error `Local ->
+    match Routes.destination_mac t.cidr t.gateway t.arp dst with
+    | Error e when Error.head e = Routing.Local ->
       Log.warn (fun f -> f "Could not find %a on the local network" Ipaddr.V4.pp dst);
-      Lwt.return @@ Error (`No_route "no response for IP on local network")
-    | Error `Gateway when t.gateway = None ->
+      Error.add_error ~__POS__ (Tcpip.Ip.No_route "no response for IP on local network") (Error e)
+    | Error e when t.gateway = None && Error.head e = Routing.Gateway ->
       Log.warn (fun f -> f "Write to %a would require an external route, which was not provided" Ipaddr.V4.pp dst);
-      Lwt.return @@ Ok ()
-    | Error `Gateway ->
+      Ok ()
+    | Error e when Error.head e = Routing.Local ->
       Log.warn (fun f -> f "Write to %a requires an external route, and the provided %a was not reachable" Ipaddr.V4.pp dst (Fmt.option Ipaddr.V4.pp) t.gateway);
       (* when a gateway is specified the user likely expects their traffic to be passed to it *)
-      Lwt.return @@ Error (`No_route "no route to default gateway to outside world")
+      Error.add_error ~__POS__ (Tcpip.Ip.No_route "no route to default gateway to outside world") (Error e)
+    | Error e -> Error e
     | Ok mac ->
       (* need first to deal with fragmentation decision - find out mtu *)
       let mtu = Ethernet.mtu t.ethif in
@@ -62,7 +55,7 @@ module Make (R: Mirage_random.S) (C: Mirage_clock.MCLOCK) (Ethernet: Ethernet.S)
       let multiple = needed_bytes > mtu in
       (* construct the header (will be reused across fragments) *)
       if not fragment && multiple then
-        Lwt.return (Error `Would_fragment)
+        (Error.v ~__POS__ Tcpip.Ip.Would_fragment)
       else
         let off =
           match fragment, multiple with
@@ -80,11 +73,11 @@ module Make (R: Mirage_random.S) (C: Mirage_clock.MCLOCK) (Ethernet: Ethernet.S)
             proto = Ipv4_packet.Marshal.protocol_to_int proto }
         in
         let writeout size fill =
-          Ethernet.write t.ethif mac `IPv4 ~size fill >|= function
+          match Ethernet.write t.ethif mac `IPv4 ~size fill with
           | Error e ->
             Log.warn (fun f -> f "Error sending Ethernet frame: %a"
-                         Ethernet.pp_error e);
-            Error (`Ethif e)
+                         Error.pp (Error.head e));
+            Error e
           | Ok () -> Ok ()
         in
         Log.debug (fun m -> m "ip write: mtu is %d, hdr_len is %d, size %d \
@@ -111,16 +104,16 @@ module Make (R: Mirage_random.S) (C: Mirage_clock.MCLOCK) (Ethernet: Ethernet.S)
             Log.err (fun m -> m "failure while assembling ip frame: %s" msg) ;
             invalid_arg msg
         in
-        writeout (min mtu needed_bytes) fill >>= function
-        | Error e -> Lwt.return (Error e)
+        match writeout (min mtu needed_bytes) fill with
+        | Error e -> Error e
         | Ok () ->
           if not multiple then
-            Lwt.return (Ok ())
+            Ok ()
           else
             let remaining = Fragments.fragment ~mtu hdr !leftover in
-            Lwt_list.fold_left_s (fun acc p ->
+            List.fold_left (fun acc p ->
                 match acc with
-                | Error e -> Lwt.return (Error e)
+                | Error e -> Error e
                 | Ok () ->
                   let l = Cstruct.length p in
                   writeout l (fun buf -> Cstruct.blit p 0 buf 0 l ; l))
@@ -129,8 +122,7 @@ module Make (R: Mirage_random.S) (C: Mirage_clock.MCLOCK) (Ethernet: Ethernet.S)
   let input t ~tcp ~udp ~default buf =
     match Ipv4_packet.Unmarshal.of_cstruct buf with
     | Error s ->
-      Log.info (fun m -> m "error %s while parsing IPv4 frame %a" s Cstruct.hexdump_pp buf);
-      Lwt.return_unit
+      Log.info (fun m -> m "error %s while parsing IPv4 frame %a" s Cstruct.hexdump_pp buf)
     | Ok (packet, payload) ->
       let of_interest ip =
         Ipaddr.V4.(compare ip (Prefix.address t.cidr) = 0
@@ -139,17 +131,15 @@ module Make (R: Mirage_random.S) (C: Mirage_clock.MCLOCK) (Ethernet: Ethernet.S)
       in
       if not (of_interest packet.dst) then begin
         Log.debug (fun m -> m "dropping IP fragment not for us or broadcast %a"
-                      Ipv4_packet.pp packet);
-        Lwt.return_unit
+                      Ipv4_packet.pp packet)
       end else if Cstruct.length payload = 0 then begin
-        Log.debug (fun m -> m "dropping zero length IPv4 frame %a" Ipv4_packet.pp packet) ;
-        Lwt.return_unit
+        Log.debug (fun m -> m "dropping zero length IPv4 frame %a" Ipv4_packet.pp packet)
       end else
         let ts = C.elapsed_ns () in
         let cache, res = Fragments.process t.cache ts packet payload in
         t.cache <- cache ;
         match res with
-        | None -> Lwt.return_unit
+        | None -> ()
         | Some (packet, payload) ->
           let src, dst = packet.src, packet.dst in
           match Ipv4_packet.Unmarshal.int_to_protocol packet.proto with
@@ -160,13 +150,13 @@ module Make (R: Mirage_random.S) (C: Mirage_clock.MCLOCK) (Ethernet: Ethernet.S)
   let connect
       ?(no_init = false) ~cidr ?gateway ?(fragment_cache_size = 1024 * 256) ethif arp =
     (if no_init then
-       Lwt.return_unit
+       ()
      else
-       Arpv4.set_ips arp [Ipaddr.V4.Prefix.address cidr]) >|= fun () ->
+       Arpv4.set_ips arp [Ipaddr.V4.Prefix.address cidr]);
     let cache = Fragments.Cache.empty fragment_cache_size in
     { ethif; arp; cidr; gateway; cache }
 
-  let disconnect _ = Lwt.return_unit
+  let disconnect _ = ()
 
   let get_ip t = [Ipaddr.V4.Prefix.address t.cidr]
 

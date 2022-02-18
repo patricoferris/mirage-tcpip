@@ -1,12 +1,10 @@
 (** {2 IP layer} *)
 
 (** IP errors and protocols. *)
-type error = [
-  | `No_route of string (** can't send a message to that destination *)
-  | `Would_fragment (** would need to fragment, but fragmentation is disabled *)
-]
+type Error.t +=
+  | No_route of string (** can't send a message to that destination *)
+  | Would_fragment (** would need to fragment, but fragmentation is disabled *)
 
-val pp_error : error Fmt.t
 
 type proto = [ `TCP | `UDP | `ICMP ]
 val pp_proto: proto Fmt.t
@@ -15,12 +13,6 @@ val pp_proto: proto Fmt.t
    removes the IP header, and on the sending side fragments overlong payload
    and inserts IP headers. *)
 module type S = sig
-
-  type nonrec error = private [> error]
-  (** The type for IP errors. *)
-
-  val pp_error: error Fmt.t
-  (** [pp_error] is the pretty-printer for errors. *)
 
   type ipaddr
   (** The type for IP addresses. *)
@@ -31,11 +23,11 @@ module type S = sig
   type t
   (** The type representing the internal state of the IP layer. *)
 
-  val disconnect: t -> unit Lwt.t
+  val disconnect: t -> unit
   (** Disconnect from the IP layer. While this might take some time to
       complete, it can never result in an error. *)
 
-  type callback = src:ipaddr -> dst:ipaddr -> Cstruct.t -> unit Lwt.t
+  type callback = src:ipaddr -> dst:ipaddr -> Cstruct.t -> unit
   (** An input continuation used by the parsing functions to pass on
       an input packet down the stack.
 
@@ -47,7 +39,7 @@ module type S = sig
   val input:
     t ->
     tcp:callback -> udp:callback -> default:(proto:int -> callback) ->
-    Cstruct.t -> unit Lwt.t
+    Cstruct.t -> unit
   (** [input ~tcp ~udp ~default ip buf] demultiplexes an incoming
       [buffer] that contains an IP frame. It examines the protocol
       header and passes the result onto either the [tcp] or [udp]
@@ -55,7 +47,7 @@ module type S = sig
 
   val write: t -> ?fragment:bool -> ?ttl:int ->
     ?src:ipaddr -> ipaddr -> proto -> ?size:int -> (Cstruct.t -> int) ->
-    Cstruct.t list -> (unit, error) result Lwt.t
+    Cstruct.t list -> unit Error.r
   (** [write t ~fragment ~ttl ~src dst proto ~size headerf payload] allocates a
      buffer, writes the IP header, and calls the headerf function. This may
      write to the provided buffer of [size] (default 0). If [size + ip header]

@@ -55,6 +55,7 @@ module Marshal = struct
     in
     let options_len = nearest_4 @@ Cstruct.length t.options in
     set_ipv4_hlen_version buf ((4 lsl 4) + 5 + (options_len / 4));
+    set_ipv4_tos buf 0;
     set_ipv4_id buf t.id;
     set_ipv4_off buf t.off;
     set_ipv4_ttl buf t.ttl;

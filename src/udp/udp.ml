@@ -14,18 +14,14 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *)
 
-open Lwt.Infix
-
 let src = Logs.Src.create "udp" ~doc:"Mirage UDP"
 module Log = (val Logs.src_log src : Logs.LOG)
 
 module Make (Ip : Tcpip.Ip.S) (Random : Mirage_random.S) = struct
 
   type ipaddr = Ip.ipaddr
-  type callback = src:ipaddr -> dst:ipaddr -> src_port:int -> Cstruct.t -> unit Lwt.t
+  type callback = src:ipaddr -> dst:ipaddr -> src_port:int -> Cstruct.t -> unit
 
-  type error = [ `Ip of Ip.error ]
-  let pp_error ppf (`Ip e) = Ip.pp_error ppf e
 
   type t = {
     ip : Ip.t;
@@ -49,11 +45,10 @@ module Make (Ip : Tcpip.Ip.S) (Random : Mirage_random.S) = struct
     match Udp_packet.Unmarshal.of_cstruct buf with
     | Error s ->
       Log.debug (fun f ->
-          f "Discarding received UDP message: error parsing: %s" s);
-      Lwt.return_unit
+          f "Discarding received UDP message: error parsing: %s" s)
     | Ok ({ Udp_packet.src_port; dst_port}, payload) ->
       match Hashtbl.find_opt t.listeners dst_port with
-      | None    -> Lwt.return_unit
+      | None    -> ()
       | Some fn -> fn ~src ~dst ~src_port payload
 
   let writev ?src ?src_port ?ttl ~dst ~dst_port t bufs =
@@ -73,11 +68,11 @@ module Make (Ip : Tcpip.Ip.S) (Random : Mirage_random.S) = struct
         Logs.err (fun m -> m "error while assembling udp header: %s, ignoring" msg);
         8
     in
-    Ip.write t.ip ?src dst ?ttl `UDP ~size:8 fill_hdr bufs >|= function
+    match Ip.write t.ip ?src dst ?ttl `UDP ~size:8 fill_hdr bufs with
     | Ok () -> Ok ()
     | Error e ->
       Log.err (fun f -> f "IP module couldn't send UDP packet to %a: %a"
-                  pp_ip dst Ip.pp_error e);
+                  pp_ip dst Error.pp (Error.head e));
       (* we're supposed to make our best effort, and we did *)
       Ok ()
 
@@ -86,11 +81,9 @@ module Make (Ip : Tcpip.Ip.S) (Random : Mirage_random.S) = struct
 
   let connect ip =
     Log.info (fun f -> f "UDP interface connected on %a" (Fmt.list Ip.pp_ipaddr) @@ Ip.get_ip ip);
-    let t = { ip ; listeners = Hashtbl.create 7 } in
-    Lwt.return t
+    { ip ; listeners = Hashtbl.create 7 }
 
   let disconnect t =
-    Log.info (fun f -> f "UDP interface disconnected on %a" (Fmt.list Ip.pp_ipaddr) @@ Ip.get_ip t.ip);
-    Lwt.return_unit
+    Log.info (fun f -> f "UDP interface disconnected on %a" (Fmt.list Ip.pp_ipaddr) @@ Ip.get_ip t.ip)
 
 end
