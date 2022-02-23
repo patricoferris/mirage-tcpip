@@ -81,8 +81,7 @@ module Marshal = struct
       | k -> (4 - k) + n
     in
     let options_len = nearest_4 @@ Cstruct.length t.options in
-    let buf = Cstruct.create (sizeof_ipv4 + options_len) in
-    Cstruct.memset buf 0x00; (* should be removable in the future *)
+    let buf = Cstruct.create_unsafe (sizeof_ipv4 + options_len) in
     unsafe_fill ~payload_len t buf;
     buf
 end

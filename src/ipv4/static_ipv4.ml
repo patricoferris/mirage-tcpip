@@ -72,40 +72,47 @@ module Make (R: Mirage_random.S) (C: Mirage_clock.MCLOCK) (Ethernet: Ethernet.S)
             src ; dst ; ttl ; off ; id ;
             proto = Ipv4_packet.Marshal.protocol_to_int proto }
         in
-        let writeout size fill =
-          match Ethernet.write t.ethif mac `IPv4 ~size fill with
-          | Error e ->
-            Log.warn (fun f -> f "Error sending Ethernet frame: %a"
-                         Error.pp (Error.head e));
-            Error e
-          | Ok () -> Ok ()
-        in
         Log.debug (fun m -> m "ip write: mtu is %d, hdr_len is %d, size %d \
                                payload len %d, needed_bytes %d"
                       mtu hdr_len size (Cstruct.lenv bufs) needed_bytes) ;
-        let leftover = ref Cstruct.empty in
+        let leftover = ref [] in
         (* first fragment *)
-        let fill buf =
-          let payload_buf = Cstruct.shift buf hdr_len in
-          let header_len = headerf payload_buf in
+        let iovec =
+          (* headerf *)
+          let headerf_buf = Cstruct.create_unsafe size in
+          let header_len = headerf headerf_buf in
           if header_len > size then begin
             Log.err (fun m -> m "headers returned length exceeding size") ;
             invalid_arg "headerf exceeds size"
           end ;
-          (* need to copy the given payload *)
-          let len, rest =
-            Cstruct.fillv ~src:bufs ~dst:(Cstruct.shift payload_buf header_len)
+          (* no need to copy the given payload *)
+          let payload_first_frame = 
+            if multiple then
+              let cur, rest =
+                let rec splitv current_buffers saved_buffers = function
+                  | 0 -> (List.rev saved_buffers, current_buffers)
+                  | n ->
+                    match current_buffers with
+                    | [] -> (List.rev saved_buffers, [])
+                    | t :: rest when n >= t.Cstruct.len -> splitv rest (t :: saved_buffers) (n - t.len)
+                    | t :: rest -> (List.rev (Cstruct.sub t 0 n :: saved_buffers), Cstruct.shift t n :: rest)
+                in
+                splitv bufs [] (mtu - hdr_len - size) 
+              in
+              leftover := rest;
+              cur
+            else
+              bufs
           in
-          leftover := Cstruct.concat rest;
-          let payload_len = header_len + len in
-          match Ipv4_packet.Marshal.into_cstruct ~payload_len hdr buf with
-          | Ok () -> payload_len + hdr_len
-          | Error msg ->
-            Log.err (fun m -> m "failure while assembling ip frame: %s" msg) ;
-            invalid_arg msg
+          let payload_len = header_len + (Cstruct.lenv payload_first_frame) in
+          let header = Ipv4_packet.Marshal.make_cstruct ~payload_len hdr  in
+          header::headerf_buf::payload_first_frame
         in
-        match writeout (min mtu needed_bytes) fill with
-        | Error e -> Error e
+        match Ethernet.writev t.ethif mac `IPv4 iovec with
+        | Error e -> 
+          Log.warn (fun f -> f "Error sending Ethernet frame: %a"
+                       Error.pp (Error.head e));
+          Error e
         | Ok () ->
           if not multiple then
             Ok ()
@@ -114,9 +121,7 @@ module Make (R: Mirage_random.S) (C: Mirage_clock.MCLOCK) (Ethernet: Ethernet.S)
             List.fold_left (fun acc p ->
                 match acc with
                 | Error e -> Error e
-                | Ok () ->
-                  let l = Cstruct.length p in
-                  writeout l (fun buf -> Cstruct.blit p 0 buf 0 l ; l))
+                | Ok () -> Ethernet.writev t.ethif mac `IPv4 p)
               (Ok ()) remaining
 
   let input t ~tcp ~udp ~default buf =
@@ -142,6 +147,7 @@ module Make (R: Mirage_random.S) (C: Mirage_clock.MCLOCK) (Ethernet: Ethernet.S)
         | None -> ()
         | Some (packet, payload) ->
           let src, dst = packet.src, packet.dst in
+          Eio.Private.Ctf.label "ipv4: callback";
           match Ipv4_packet.Unmarshal.int_to_protocol packet.proto with
           | Some `TCP -> tcp ~src ~dst payload
           | Some `UDP -> udp ~src ~dst payload
