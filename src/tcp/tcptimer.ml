@@ -14,7 +14,7 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *)
 
-open Lwt.Infix
+module Lwt = struct end
 
 let src = Logs.Src.create "tcptimer" ~doc:"Mirage TCP Tcptimer module"
 module Log = (val Logs.src_log src : Logs.LOG)
@@ -27,46 +27,45 @@ type tr =
   | ContinueSetPeriod of (time * Sequence.t)
 
 type t = {
-  expire: (Sequence.t -> tr Lwt.t);
+  expire: (Sequence.t -> tr);
   mutable period_ns: time;
   mutable running: bool;
+  clock: Eio.Time.clock;
 }
 
-module Make(Time:Mirage_time.S) = struct
-  let t ~period_ns ~expire =
-    let running = false in
-    {period_ns; expire; running}
+let t ~period_ns ~expire ~clock =
+  let running = false in
+  {period_ns; expire; running; clock}
 
-  let timerloop t s =
-    Log.debug (fun f -> f "timerloop");
-    Stats.incr_timer ();
-    let rec aux t s =
-      Log.debug (fun f -> f "timerloop: sleeping for %Lu ns" t.period_ns);
-      Time.sleep_ns t.period_ns >>= fun () ->
-      t.expire s >>= function
-      | Stoptimer ->
-        Stats.decr_timer ();
-        t.running <- false;
-        Log.debug (fun f -> f "timerloop: stoptimer");
-        Lwt.return_unit
-      | Continue d ->
-        Log.debug (fun f -> f "timerloop: continuer");
-        aux t d
-      | ContinueSetPeriod (p, d) ->
-        Log.debug (fun f -> f "timerloop: continuesetperiod (new period: %Lu ns)" p);
-        t.period_ns <- p;
-        aux t d
-    in
-    aux t s
-
-  let period_ns t = t.period_ns
-
-  let start t ?(p=(period_ns t)) s =
-    if not t.running then begin
+let timerloop t s =
+  Log.debug (fun f -> f "timerloop");
+  Stats.incr_timer ();
+  let rec aux t s =
+    Log.debug (fun f -> f "timerloop: sleeping for %Lu ns" t.period_ns);
+    Eio.Time.sleep t.clock (Int64.to_float t.period_ns /. 1_000_000_000.);
+    match t.expire s with
+    | Stoptimer ->
+      Stats.decr_timer ();
+      t.running <- false;
+      Log.debug (fun f -> f "timerloop: stoptimer");
+      ()
+    | Continue d ->
+      Log.debug (fun f -> f "timerloop: continuer");
+      aux t d
+    | ContinueSetPeriod (p, d) ->
+      Log.debug (fun f -> f "timerloop: continuesetperiod (new period: %Lu ns)" p);
       t.period_ns <- p;
-      t.running <- true;
-      Lwt.async (fun () -> timerloop t s);
-      Lwt.return_unit
-    end else
-      Lwt.return_unit
-end
+      aux t d
+  in
+  aux t s
+
+let period_ns t = t.period_ns
+
+let start ~sw t ?(p=(period_ns t)) sequence =
+  if not t.running then begin
+    t.period_ns <- p;
+    t.running <- true;
+    Eio.Fiber.fork ~sw (fun () -> timerloop t sequence);
+    ()
+  end else
+    ()

@@ -17,41 +17,52 @@
 (* TCP sequence numbers must work with overflow, so this puts them in a
    separate type to make sure they dont get mixed up *)
 
-type t = int32
+
+external ( = ) : int -> int -> bool = "%equal"
+external ( <> ) : int -> int -> bool = "%notequal"
+external ( < ) : int -> int -> bool = "%lessthan"
+external ( > ) : int -> int -> bool = "%greaterthan"
+external ( <= ) : int -> int -> bool = "%lessequal"
+external ( >= ) : int -> int -> bool = "%greaterequal"
+external compare : int -> int -> int = "%compare"
+external equal : int -> int -> bool = "%equal"
+
+type t = int
 
 (* a < b *)
-let lt a b = (Int32.sub a b) < 0l
+let lt a b = a < b
 
 (* a <= b *)
-let leq a b = (Int32.sub a b) <= 0l
+let leq a b = a <= b
 
 (* a > b *)
-let gt a b = (Int32.sub a b) > 0l
+let gt a b = a > b
 
 (* a >= b *)
-let geq a b = (Int32.sub a b) >= 0l
+let geq a b = a >= b
 
 (* b <= a <= c *)
 let between a b c = (geq a b) && (leq a c)
 
 (* a + b *)
-let add a b = Int32.add a b
+let add a b = a + b
 
 (* a - b *)
-let sub a b = Int32.sub a b
+let sub a b = a - b
 
 (* a + 1 *)
-let succ a = Int32.succ a
+let succ a = a + 1
 
 (* a - 1 *)
-let pred a = Int32.pred a
+let pred a = a - 1
 
-let compare a b = Int32.compare a b
-let of_int32 t = t
-let of_int t = Int32.of_int t
-let to_int32 t = t
-let to_int t = Int32.to_int t
+let compare a b = compare a b
+let of_int32 t = Int32.to_int t
+let of_int t = t
+let to_int32 t = Int32.of_int t
+let to_int t = t
 
-let zero = Int32.zero
+let zero = 0
 
-let pp fmt t = Format.fprintf fmt "%lu" t
+let pp fmt t = Fmt.int fmt t
+    

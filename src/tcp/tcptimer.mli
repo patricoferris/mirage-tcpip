@@ -23,8 +23,6 @@ type tr =
   | Continue of Sequence.t
   | ContinueSetPeriod of (time * Sequence.t)
 
-module Make(T:Mirage_time.S) : sig
-  val t : period_ns: time -> expire: (Sequence.t -> tr Lwt.t) -> t
+val t : period_ns: time -> expire: (Sequence.t -> tr) -> clock:Eio.Time.clock -> t
 
-  val start : t -> ?p:time -> Sequence.t -> unit Lwt.t
-end
+val start : sw:Eio.Switch.t -> t -> ?p:time -> Sequence.t -> unit

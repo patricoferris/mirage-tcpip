@@ -3,4 +3,4 @@
  (public_name tcpip)
  (instrumentation
   (backend bisect_ppx))
- (libraries cstruct lwt fmt ipaddr mirage-flow duration error))
+ (libraries cstruct lwt fmt ipaddr mirage-flow duration error eio))

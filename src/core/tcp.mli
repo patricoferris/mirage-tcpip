@@ -21,10 +21,6 @@ module type S = sig
   type ipaddr
   (** The type for IP address representations. *)
 
-  type flow
-  (** A flow represents the state of a single TCP stream that is connected
-      to an endpoint. *)
-
   type t
   (** The type representing the internal state of the TCP layer. *)
 
@@ -32,30 +28,7 @@ module type S = sig
   (** Disconnect from the TCP layer. While this might take some time to
       complete, it can never result in an error. *)
 
-  include Mirage_flow.S with
-      type flow   := flow
-
-  val dst: flow -> ipaddr * int
-  (** Get the destination IP address and destination port that a
-      flow is currently connected to. *)
-
-  val write_nodelay: flow -> Cstruct.t -> unit Error.r
-  (** [write_nodelay flow buffer] writes the contents of [buffer]
-      to the flow. The thread blocks until all data has been successfully
-      transmitted to the remote endpoint.
-      Buffering within the layer is minimized in this mode.
-      Note that this API will change in a future revision to be a
-      per-flow attribute instead of a separately exposed function. *)
-
-  val writev_nodelay: flow -> Cstruct.t list -> unit Error.r
-  (** [writev_nodelay flow buffers] writes the contents of [buffers]
-      to the flow. The thread blocks until all data has been successfully
-      transmitted to the remote endpoint.
-      Buffering within the layer is minimized in this mode.
-      Note that this API will change in a future revision to be a
-      per-flow attribute instead of a separately exposed function. *)
-
-  val create_connection: ?keepalive:Keepalive.t -> t -> ipaddr * int -> flow Error.r
+  val create_connection: ?keepalive:Keepalive.t -> t -> ipaddr * int -> <Eio.Flow.two_way; Eio.Flow.close> Error.r
   (** [create_connection ~keepalive t (addr,port)] opens a TCP connection
       to the specified endpoint.
 
@@ -64,7 +37,7 @@ module type S = sig
       no responses are received then eventually the connection will be disconnected:
       [read] will return [Ok `Eof] and write will return [Error `Closed] *)
 
-  val listen : t -> port:int -> ?keepalive:Keepalive.t -> (flow -> unit) -> unit
+  val listen : t -> port:int -> ?keepalive:Keepalive.t -> (<Eio.Flow.two_way; Eio.Flow.close> -> unit) -> unit
   (** [listen t ~port ~keepalive callback] listens on [port]. The [callback] is
       executed for each flow that was established. If [keepalive] is provided,
       this configuration will be applied before calling [callback].
