@@ -33,7 +33,7 @@ module Tx(Clock:Mirage_clock.MCLOCK) : sig
 
   module TXS : sig
     type t = Segment.Tx(Clock).t
-    val output : sw:Eio.Switch.t -> ?flags:Segment.tx_flags -> ?options:Options.t list -> t ->
+    val output : ?flags:Segment.tx_flags -> ?options:Options.t list -> t ->
       Cstruct.t -> unit
   end
 
@@ -41,8 +41,8 @@ module Tx(Clock:Mirage_clock.MCLOCK) : sig
   val available: t -> int32
   val wait_for: t -> int32 -> unit
   val wait_for_flushed: t -> unit
-  val write: sw:Eio.Switch.t -> t -> Cstruct.t list -> unit
-  val write_nodelay: sw:Eio.Switch.t -> t -> Cstruct.t list -> unit
-  val free: sw:Eio.Switch.t -> t -> int -> unit
+  val write: t -> Cstruct.t list -> unit
+  val write_nodelay: t -> Cstruct.t list -> unit
+  val free: t -> int -> unit
   val reset: t -> unit
 end

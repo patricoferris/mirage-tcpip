@@ -180,7 +180,7 @@ module Tx(Clock:Mirage_clock.MCLOCK) = struct
       wait_for_flushed t
     end
 
-  let rec clear_buffer ~sw t =
+  let rec clear_buffer t =
     let rec addon_more curr_data l =
       match Lwt_dllist.take_opt_l t.buffer with
       | None -> List.rev curr_data
@@ -227,14 +227,14 @@ module Tx(Clock:Mirage_clock.MCLOCK) = struct
       | None -> ()
       | Some pkt ->
         let b = compactbufs pkt in
-        TXS.output ~sw ~flags:Segment.Psh t.txq b;
-        clear_buffer ~sw t
+        TXS.output ~flags:Segment.Psh t.txq b;
+        clear_buffer t
 
   (* Chunk up the segments into MSS max for transmission *)
-  let transmit_segments ~sw ~mss ~txq datav =
+  let transmit_segments ~mss ~txq datav =
     let transmit acc =
       let b = compactbufs (List.rev acc) in
-      TXS.output ~sw ~flags:Segment.Psh txq b
+      TXS.output ~flags:Segment.Psh txq b
     in
     let rec chunk datav acc =
       match datav with
@@ -255,7 +255,7 @@ module Tx(Clock:Mirage_clock.MCLOCK) = struct
     in
     chunk datav []
 
-  let write ~sw t datav =
+  let write t datav =
     let l = lenv datav in
     let mss = Int32.of_int (Window.tx_mss t.wnd) in
     match Lwt_dllist.is_empty t.buffer &&
@@ -266,7 +266,7 @@ module Tx(Clock:Mirage_clock.MCLOCK) = struct
       if t.bufbytes < mss then
         ()
       else
-        clear_buffer ~sw t
+        clear_buffer t
     | true ->
       let avail_len = available_cwnd t in
       match avail_len < l with
@@ -276,9 +276,9 @@ module Tx(Clock:Mirage_clock.MCLOCK) = struct
         ()
       | false ->
         let max_size = Window.tx_mss t.wnd in
-        transmit_segments ~sw ~mss:max_size ~txq:t.txq datav
+        transmit_segments ~mss:max_size ~txq:t.txq datav
 
-  let write_nodelay ~sw t datav =
+  let write_nodelay t datav =
     let l = lenv datav in
     match Lwt_dllist.is_empty t.buffer with
     | false ->
@@ -294,7 +294,7 @@ module Tx(Clock:Mirage_clock.MCLOCK) = struct
         ()
       | false ->
         let max_size = Window.tx_mss t.wnd in
-        transmit_segments ~sw ~mss:max_size ~txq:t.txq datav
+        transmit_segments ~mss:max_size ~txq:t.txq datav
 
 
   let inform_app t =
@@ -309,8 +309,8 @@ module Tx(Clock:Mirage_clock.MCLOCK) = struct
      Note that sz does not take window scaling into account, and so
      should be passed as unscaled (i.e. from the wire) here.
      Window will internally scale it up. *)
-  let free ~sw t _sz =
-    clear_buffer ~sw t;
+  let free t _sz =
+    clear_buffer t;
     inform_app t
 
   let reset t =

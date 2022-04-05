@@ -351,7 +351,6 @@ module Tx (Clock:Mirage_clock.MCLOCK) = struct
           lwt_sequence_add_l s segs;
           ack_remaining
         | false ->
-          Log.warn (fun f -> f "ACK: %d" (Sequence.to_int ack_remaining));
           ack_segment q s;
           clearsegs q (Sequence.sub ack_remaining seg_len) segs
 
@@ -419,7 +418,7 @@ module Tx (Clock:Mirage_clock.MCLOCK) = struct
     let dup_acks = 0 in
     let expire = ontimer ~sw xmit state segs wnd in
     let period_ns = Window.rto wnd in
-    let rexmit_timer = TT.t ~clock ~period_ns ~expire in
+    let rexmit_timer = TT.t ~sw ~clock ~period_ns ~expire in
     let q =
       { xmit; wnd; state; rx_ack; segs; tx_wnd_update;
         rexmit_timer; dup_acks }
@@ -433,7 +432,7 @@ module Tx (Clock:Mirage_clock.MCLOCK) = struct
      The transmitter should check that the segment size will
      will not be greater than the transmit window.
   *)
-  let output ~sw ?(flags=No_flags) ?(options=[]) (T q) data =
+  let output ?(flags=No_flags) ?(options=[]) (T q) data =
     (* Transmit the packet to the wire
          TODO: deal with transmission soft/hard errors here RFC5461 *)
     let { wnd; _ } = q in
@@ -449,7 +448,7 @@ module Tx (Clock:Mirage_clock.MCLOCK) = struct
       | true ->
         lwt_sequence_add_r seg q.segs;
         let p = Window.rto q.wnd in
-        TT.start ~sw q.rexmit_timer ~p seg.seq
+        TT.restart q.rexmit_timer ~p seg.seq
     in
     q_rexmit ();
     q.xmit ~flags ~wnd ~options ~seq data |> ignore;

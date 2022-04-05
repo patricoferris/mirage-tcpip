@@ -64,7 +64,7 @@ module Tx (Clock:Mirage_clock.MCLOCK) : sig
   type t
   (** Queue of pre-transmission segments *)
 
-    val create:
+  val create:
     sw:Eio.Switch.t -> 
     clock:Eio.Time.clock -> 
     xmit:('a, 'b) xmit -> wnd:Window.t -> state:State.t ->
@@ -73,7 +73,6 @@ module Tx (Clock:Mirage_clock.MCLOCK) : sig
     tx_wnd_update:int Eio.Stream.t -> t
 
   val output:
-    sw:Eio.Switch.t ->
     ?flags:tx_flags -> ?options:Options.t list -> t -> Cstruct.t -> unit
   (** Queue a segment for transmission. May block if:
 

@@ -28,44 +28,52 @@ type tr =
 
 type t = {
   expire: (Sequence.t -> tr);
-  mutable period_ns: time;
   mutable running: bool;
+  notify: (time option * Sequence.t) Eio.Stream.t;
   clock: Eio.Time.clock;
 }
 
-let t ~period_ns ~expire ~clock =
-  let running = false in
-  {period_ns; expire; running; clock}
-
-let timerloop t s =
+let timerloop t seq period_ns =
   Log.debug (fun f -> f "timerloop");
   Stats.incr_timer ();
-  let rec aux t s =
-    Log.debug (fun f -> f "timerloop: sleeping for %Lu ns" t.period_ns);
-    Eio.Time.sleep t.clock (Int64.to_float t.period_ns /. 1_000_000_000.);
+  let rec aux t s period_ns =
+    Log.debug (fun f -> f "timerloop: sleeping for %Lu ns" period_ns);
+    Eio.Time.sleep t.clock (Int64.to_float period_ns /. 1_000_000_000.);
     match t.expire s with
     | Stoptimer ->
       Stats.decr_timer ();
-      t.running <- false;
       Log.debug (fun f -> f "timerloop: stoptimer");
       ()
     | Continue d ->
       Log.debug (fun f -> f "timerloop: continuer");
-      aux t d
+      aux t d period_ns
     | ContinueSetPeriod (p, d) ->
       Log.debug (fun f -> f "timerloop: continuesetperiod (new period: %Lu ns)" p);
-      t.period_ns <- p;
-      aux t d
+      aux t d p
   in
-  aux t s
+  aux t seq period_ns
 
-let period_ns t = t.period_ns
+let listener_thread v period_ns () =
+  let rec loop period_ns =
+    let (next_period_ns, seq) = Eio.Stream.take v.notify in 
+    v.running <- true;
+    let next_period_ns = 
+      Option.value next_period_ns ~default:period_ns 
+    in
+    timerloop v seq next_period_ns;
+    v.running <- false;
+    loop next_period_ns
+  in
+  loop period_ns
 
-let start ~sw t ?(p=(period_ns t)) sequence =
+let t ~sw ~period_ns ~expire ~clock =
+  let notify = Eio.Stream.create 1 in
+  let v = {notify; expire; running = false; clock} in 
+  Eio.Fiber.fork ~sw (listener_thread v period_ns);
+  v
+  
+let restart t ?p sequence =
   if not t.running then begin
-    t.period_ns <- p;
-    t.running <- true;
-    Eio.Fiber.fork ~sw (fun () -> timerloop t sequence);
-    ()
+    Eio.Stream.add t.notify (p, sequence)
   end else
     ()

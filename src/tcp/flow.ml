@@ -123,7 +123,7 @@ struct
         UTX.wait_for_flushed pcb.utx;
         (let { wnd; _ } = pcb in
          STATE.tick ~sw pcb.state (State.Send_fin (Window.tx_nxt wnd));
-         TXS.output ~sw ~flags:Segment.Fin pcb.txq (Cstruct.create 0)
+         TXS.output ~flags:Segment.Fin pcb.txq (Cstruct.create 0)
         )
       | _ ->
         Log.info (fun fmt ->
@@ -186,7 +186,7 @@ struct
           | None        -> ()
           | Some winadv when Sequence.(gt winadv zero) ->
               Window.rx_advance wnd winadv;
-              ACK.receive ~sw ack (Window.rx_nxt wnd)
+              ACK.receive ack (Window.rx_nxt wnd)
           | Some winadv ->
               Window.rx_advance wnd winadv;
               ACK.pushack ack (Window.rx_nxt wnd)
@@ -213,7 +213,7 @@ struct
 
   module Wnd = struct
 
-    let thread ~sw ~urx:_ ~utx ~wnd:_ ~state ~tx_wnd_update =
+    let thread ~urx:_ ~utx ~wnd:_ ~state ~tx_wnd_update =
       (* Monitor our transmit window when updates are received
          remotely, and tell the application that new space is
          available when it is blocked *)
@@ -221,7 +221,7 @@ struct
         let tx_wnd = Eio.Stream.take tx_wnd_update in
         begin match State.state state with
           | State.Reset -> UTX.reset utx
-          | _ -> UTX.free ~sw utx tx_wnd
+          | _ -> UTX.free utx tx_wnd
         end;
         tx_window_t ()
       in
@@ -362,7 +362,7 @@ struct
     let utx = UTX.create ~wnd ~txq ~max_size:16384l in
     let rxq = RXS.create ~rx_data ~wnd ~state ~tx_ack in
     (* Set up ACK module *)
-    let ack = ACK.t ~clock:t.clock ~send_ack ~last:(Sequence.succ rx_isn) in
+    let ack = ACK.t ~sw ~clock:t.clock ~send_ack ~last:(Sequence.succ rx_isn) in
     Log.info (fun f -> f "here.\n");
     (* Set up the keepalive state if requested *)
     let keepalive = match keepalive with
@@ -380,7 +380,7 @@ struct
        and the main listener function *)
     let tx_thread = fun () -> (Tx.thread t pcb ~send_ack ~rx_ack) in
     let rx_thread = fun () -> (Rx.thread ~sw pcb ~rx_data) in
-    let wnd_thread = fun () -> (Wnd.thread ~sw ~utx ~urx ~wnd ~state ~tx_wnd_update) in
+    let wnd_thread = fun () -> (Wnd.thread ~utx ~urx ~wnd ~state ~tx_wnd_update) in
     let threads = [ tx_thread; rx_thread; wnd_thread ] in
     List.iter (Eio.Fiber.fork ~sw) threads;
     pcb_allocs := !pcb_allocs + 1;
@@ -404,7 +404,7 @@ struct
     Stats.incr_listen ();
     (* Queue a SYN ACK for transmission *)
     let options = Options.MSS (Ip.mtu t.ip ~dst:(WIRE.dst id) - Tcp_wire.sizeof_tcp) :: opts in
-    TXS.output ~sw ~flags:Segment.Syn ~options pcb.txq (Cstruct.create 0);
+    TXS.output ~flags:Segment.Syn ~options pcb.txq (Cstruct.create 0);
     pcb
   
   let new_client_connection ~sw t params id ack_number keepalive =
@@ -420,7 +420,7 @@ struct
     Stats.incr_channel ();
     STATE.tick ~sw pcb.state (State.Recv_synack ack_number);
     (* xmit ACK *)
-    TXS.output ~sw pcb.txq (Cstruct.create 0);
+    TXS.output pcb.txq (Cstruct.create 0);
     pcb
 
   let is_correct_ack ~tx_isn ~ack_number =
@@ -547,11 +547,11 @@ struct
       | e -> e
 
   (* Blocking write on a PCB *)
-  let write ~sw pcb data = writefn pcb (UTX.write ~sw pcb.utx) data
-  let writev ~sw pcb data = iter_s (write ~sw pcb) data
+  let write pcb data = writefn pcb (UTX.write pcb.utx) data
+  let writev pcb data = iter_s (write pcb) data
 
-  let write_nodelay ~sw pcb data = writefn pcb (UTX.write_nodelay ~sw pcb.utx) data
-  let writev_nodelay ~sw pcb data = iter_s (write_nodelay ~sw pcb) data
+  let write_nodelay pcb data = writefn pcb (UTX.write_nodelay pcb.utx) data
+  let writev_nodelay pcb data = iter_s (write_nodelay pcb) data
 
   (* Close - no more will be written *)
   let close pcb = Tx.close pcb
@@ -572,7 +572,7 @@ struct
         try
           while true do
             let got = Eio.Flow.read src chunk_cs in
-            match write ~sw flow (Cstruct.sub chunk_cs 0 got) with
+            match write flow (Cstruct.sub chunk_cs 0 got) with
             | Ok () -> ()
             | Error _e -> ()
           done

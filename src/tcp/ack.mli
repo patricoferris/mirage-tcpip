@@ -19,10 +19,10 @@ module type M = sig
   type t
 
   (* ack: put mvar to trigger the transmission of an ack *)
-  val t : clock:Eio.Time.clock -> send_ack:Sequence.t Eio.Stream.t -> last:Sequence.t -> t
+  val t : sw:Eio.Switch.t -> clock:Eio.Time.clock -> send_ack:Sequence.t Eio.Stream.t -> last:Sequence.t -> t
 
   (* called when new data is received *)
-  val receive: sw:Eio.Switch.t -> t -> Sequence.t -> unit
+  val receive: t -> Sequence.t -> unit
 
   (* called when new data is received *)
   val pushack: t -> Sequence.t -> unit

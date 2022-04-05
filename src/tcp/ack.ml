@@ -20,10 +20,10 @@ module type M = sig
   type t
 
   (* ack: put mvar to trigger the transmission of an ack *)
-  val t : clock:Eio.Time.clock -> send_ack:Sequence.t Eio.Stream.t -> last:Sequence.t -> t
+  val t : sw:Eio.Switch.t -> clock:Eio.Time.clock -> send_ack:Sequence.t Eio.Stream.t -> last:Sequence.t -> t
 
   (* called when new data is received *)
-  val receive: sw:Eio.Switch.t -> t -> Sequence.t -> unit
+  val receive: t -> Sequence.t -> unit
 
   (* called when new data is received *)
   val pushack: t -> Sequence.t -> unit
@@ -40,7 +40,7 @@ module Immediate : M = struct
     mutable pushpending: bool;
   }
 
-  let t ~clock:_ ~send_ack ~last:_ =
+  let t ~sw:_ ~clock:_ ~send_ack ~last:_ =
     let pushpending = false in
     {send_ack; pushpending}
 
@@ -48,7 +48,7 @@ module Immediate : M = struct
     t.pushpending <- true;
     Eio.Stream.add t.send_ack ack_number
 
-  let receive ~sw:_ t ack_number =
+  let receive t ack_number =
     match t.pushpending with
     | true  -> ()
     | false -> pushack t ack_number
@@ -98,19 +98,19 @@ module Delayed : M = struct
         transmitack r s;
         Tcptimer.Stoptimer
 
-  let t ~clock ~send_ack ~last : t =
+  let t ~sw ~clock ~send_ack ~last : t =
     let pushpending = false in
     let delayed = false in
     let delayedack = last in
     let r = {send_ack; delayedack; delayed; pushpending} in
     let expire = ontimer r in
     let period_ns = Duration.of_ms 100 in
-    let timer = TT.t ~clock ~period_ns ~expire in
+    let timer = TT.t ~sw ~clock ~period_ns ~expire in
     {r; timer}
 
 
   (* Advance the received ACK count *)
-  let receive ~sw t ack_number =
+  let receive t ack_number =
     match t.r.delayed with
     | true ->
       t.r.delayed <- false;
@@ -118,7 +118,7 @@ module Delayed : M = struct
     | false ->
       t.r.delayed <- true;
       t.r.delayedack <- ack_number;
-      TT.start ~sw t.timer ack_number
+      TT.restart t.timer ack_number
 
 
   (* Force out an ACK *)
