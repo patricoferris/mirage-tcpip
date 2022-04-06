@@ -14,7 +14,7 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *)
 
-type t = int
+type t
 
 (* a < b *)
 val lt : t -> t -> bool
