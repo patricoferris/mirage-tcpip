@@ -17,8 +17,6 @@
 let src = Logs.Src.create "Wire" ~doc:"Mirage TCP Wire module"
 module Log = (val Logs.src_log src : Logs.LOG)
 
-let count_tcp_to_ip = MProf.Counter.make ~name:"tcp-to-ip"
-
 module Make (Ip : Tcpip.Ip.S) = struct
 
   type t = {
@@ -65,7 +63,7 @@ module Make (Ip : Tcpip.Ip.S) = struct
         0
         (* TODO: better to avoid this entirely, now we're sending empty IP
              frame and drop the payload.. oops *)
-      | Ok l -> tcp_size
+      | Ok _l -> tcp_size
     in
     match Ip.write ip ~fragment:false ~src dst `TCP ~size:tcp_size fill_buffer [payload] with
     | Ok () -> Ok ()

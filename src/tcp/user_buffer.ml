@@ -63,8 +63,8 @@ module Rx = struct
 
   let add_r t s =
     if t.cur_size > t.max_size then
-      let th,u = Eio.Promise.create ~label:"User_buffer.add_r" () in
-      let node = Lwt_dllist.add_r u t.writers in
+      let th, u = Eio.Promise.create ~label:"User_buffer.add_r" () in
+      let _node = Lwt_dllist.add_r u t.writers in
       
       (*Lwt.on_cancel th (fun _ -> Lwt_dllist.remove node);*)
 
@@ -85,7 +85,7 @@ module Rx = struct
   let take_l t =
     if Lwt_dllist.is_empty t.q then begin
       let th,u = Eio.Promise.create ~label:"User_buffer.take_l" () in
-      let node = Lwt_dllist.add_r u t.readers in
+      let _node = Lwt_dllist.add_r u t.readers in
       (*Lwt.on_cancel th (fun _ -> Lwt_dllist.remove node);*)
       Eio.Promise.await th
     end else begin
@@ -159,7 +159,7 @@ module Tx(Clock:Mirage_clock.MCLOCK) = struct
     end
     else begin
       let th,u = Eio.Promise.create ~label:"User_buffer.wait_for" () in
-      let node = Lwt_dllist.add_r u t.writers in
+      let _node = Lwt_dllist.add_r u t.writers in
       (*Lwt.on_cancel th (fun _ -> Lwt_dllist.remove node);*)
       Eio.Promise.await th;
       wait_for t sz
@@ -174,7 +174,7 @@ module Tx(Clock:Mirage_clock.MCLOCK) = struct
     end
     else begin
       let th,u = Eio.Promise.create ~label:"User_buffer.wait_for_flushed" () in
-      let node = Lwt_dllist.add_r u t.writers in
+      let _node = Lwt_dllist.add_r u t.writers in
       (*Lwt.on_cancel th (fun _ -> Lwt_dllist.remove node);*)
       Eio.Promise.await th;
       wait_for_flushed t

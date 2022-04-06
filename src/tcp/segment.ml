@@ -387,7 +387,7 @@ module Tx (Clock:Mirage_clock.MCLOCK) = struct
           q.dup_acks <- 0;
           ()
       in
-      Eio.Stream.take tx_ack;
+      let _ = Eio.Stream.take tx_ack in
       Window.set_ack_serviced q.wnd true;
       let seq = Window.ack_seq q.wnd in
       let win = Window.ack_win q.wnd in

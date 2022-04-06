@@ -138,7 +138,7 @@ struct
 
       (* Transmit an empty ack when prompted by the Ack thread *)
       let rec send_empty_ack () =
-        Eio.Stream.take send_ack;
+        let _ = Eio.Stream.take send_ack in
         let ack_number = Window.rx_nxt wnd in
         let flags = Segment.No_flags in
         let options = [] in
@@ -164,7 +164,7 @@ struct
   module Rx = struct
 
     (* Process an incoming TCP packet that has an active PCB *)
-    let input t parsed (pcb,sw) =
+    let input _t parsed (pcb,sw) =
       let { rxq; _ } = pcb in
       (* The connection is alive! *)
       begin match pcb.keepalive with
@@ -254,11 +254,6 @@ struct
         )
       | None ->
         Log.info (fun f -> f "error in removing %a - no such connection" WIRE.pp id)
-
-  let pcb_allocs = ref 0
-  let th_allocs = ref 0
-  let pcb_frees = ref 0
-  let th_frees = ref 0
 
   let resolve_wnd_scaling options rx_wnd_scaleoffer =
     let tx_wnd_scale = List.fold_left (fun a ->
@@ -383,9 +378,6 @@ struct
     let wnd_thread = fun () -> (Wnd.thread ~utx ~urx ~wnd ~state ~tx_wnd_update) in
     let threads = [ tx_thread; rx_thread; wnd_thread ] in
     List.iter (Eio.Fiber.fork ~sw) threads;
-    pcb_allocs := !pcb_allocs + 1;
-    let fnpcb = fun _ -> pcb_frees := !pcb_frees + 1 in
-    Gc.finalise fnpcb pcb;
     (pcb, opts)
 
   let new_server_connection ~sw t params id pushf keepalive =
@@ -540,33 +532,18 @@ struct
       end
     | _ -> Error.v Not_ready
 
-  let rec iter_s f = function
-    | [] -> Ok ()
-    | h :: t -> match f h with
-      | Ok () -> iter_s f t
-      | e -> e
-
   (* Blocking write on a PCB *)
   let write pcb data = writefn pcb (UTX.write pcb.utx) data
-  let writev pcb data = iter_s (write pcb) data
-
-  let write_nodelay pcb data = writefn pcb (UTX.write_nodelay pcb.utx) data
-  let writev_nodelay pcb data = iter_s (write_nodelay pcb) data
 
   (* Close - no more will be written *)
   let close pcb = Tx.close pcb
-
-
-  (* EIO FLOW *)
-  type _ Eio.Generic.ty += Flow : flow Eio.Generic.ty
 
   let chunk_cs = Cstruct.create 10000 
 
   class flow_obj ((flow, sw) : connection) =
     object (_ : < Eio.Flow.source ; Eio.Flow.sink ; .. >)
     
-      method probe : type a. a Eio.Generic.ty -> a option =
-        function Flow -> Some flow | _ -> None
+      method probe _ = None
 
       method copy (src : #Eio.Flow.source) =
         try
@@ -661,9 +638,6 @@ struct
         (Rx.input t RXS.({header = pkt; payload}))
         (* No existing PCB, so check if it is a SYN for a listening function *)
         (input_no_pcb t (pkt, payload))
-
-
-  let dst pcb = WIRE.dst pcb.id, WIRE.dst_port pcb.id
 
   let getid t dst dst_port =
     (* TODO: make this more robust and recognise when all ports are gone *)
