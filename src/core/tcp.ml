@@ -13,8 +13,10 @@ module type S = sig
   type t
   val disconnect : t -> unit
 
-  val create_connection: ?keepalive:Keepalive.t -> t -> ipaddr * int -> <Eio.Flow.two_way; Eio.Flow.close> Error.r
-  val listen : t -> port:int -> ?keepalive:Keepalive.t -> (<Eio.Flow.two_way; Eio.Flow.close> -> unit) -> unit
+  type dst = <dst: ipaddr * int>
+
+  val create_connection: ?keepalive:Keepalive.t -> t -> ipaddr * int -> <Eio.Flow.two_way; Eio.Flow.close; dst> Error.r
+  val listen : t -> port:int -> ?keepalive:Keepalive.t -> (<Eio.Flow.two_way; Eio.Flow.close; dst> -> unit) -> unit
   val unlisten : t -> port:int -> unit
 
   val input: t -> src:ipaddr -> dst:ipaddr -> Cstruct.t -> unit

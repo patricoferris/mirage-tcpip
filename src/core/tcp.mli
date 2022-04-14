@@ -26,11 +26,13 @@ module type S = sig
   type t
   (** The type representing the internal state of the TCP layer. *)
 
+  type dst = <dst: ipaddr * int>
+
   val disconnect: t -> unit
   (** Disconnect from the TCP layer. While this might take some time to
       complete, it can never result in an error. *)
 
-  val create_connection: ?keepalive:Keepalive.t -> t -> ipaddr * int -> <Eio.Flow.two_way; Eio.Flow.close> Error.r
+  val create_connection: ?keepalive:Keepalive.t -> t -> ipaddr * int -> <Eio.Flow.two_way; Eio.Flow.close; dst> Error.r
   (** [create_connection ~keepalive t (addr,port)] opens a TCP connection
       to the specified endpoint.
 
@@ -39,7 +41,7 @@ module type S = sig
       no responses are received then eventually the connection will be disconnected:
       [read] will return [Ok `Eof] and write will return [Error `Closed] *)
 
-  val listen : t -> port:int -> ?keepalive:Keepalive.t -> (<Eio.Flow.two_way; Eio.Flow.close> -> unit) -> unit
+  val listen : t -> port:int -> ?keepalive:Keepalive.t -> (<Eio.Flow.two_way; Eio.Flow.close; dst> -> unit) -> unit
   (** [listen t ~port ~keepalive callback] listens on [port]. The [callback] is
       executed for each flow that was established. If [keepalive] is provided,
       this configuration will be applied before calling [callback].
