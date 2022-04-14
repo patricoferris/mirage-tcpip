@@ -6,6 +6,8 @@ module Keepalive = struct
   }
 end
 
+type Error.t += Refused | Timeout
+
 module type S = sig
   type ipaddr
   type t

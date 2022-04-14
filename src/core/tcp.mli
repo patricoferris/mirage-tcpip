@@ -14,6 +14,8 @@ module Keepalive: sig
   (** Configuration for TCP keep-alives *)
 end
 
+type Error.t += Refused | Timeout
+
 (** Transmission Control Protocol layer: reliable ordered streaming
     communication. *)
 module type S = sig
