@@ -53,6 +53,8 @@ struct
   type flow = pcb
   type connection = flow * Eio.Switch.t
 
+  type dst = <dst: ipaddr * int>
+
   type t = {
     ip : Ip.t;
     sw : Eio.Switch.t;
@@ -60,7 +62,7 @@ struct
     listeners :
       ( int,
         Tcpip.Tcp.Keepalive.t option
-        * (< Eio.Flow.two_way ; Eio.Flow.close > -> unit) )
+        * (< Eio.Flow.two_way ; Eio.Flow.close; dst > -> unit) )
       Hashtbl.t;
     mutable active : bool;
     mutable localport : int;
@@ -70,7 +72,7 @@ struct
     listens :
       ( WIRE.t,
         Sequence.t
-        * ((< Eio.Flow.two_way ; Eio.Flow.close > -> unit) * connection) )
+        * ((< Eio.Flow.two_way ; Eio.Flow.close; dst > -> unit) * connection) )
       Hashtbl.t;
     (* clients in the process of connecting *)
     connects :
@@ -80,6 +82,7 @@ struct
         * Tcpip.Tcp.Keepalive.t option )
       Hashtbl.t;
   }
+
 
   let listen t ~port ?keepalive cb =
     if port < 0 || port > 65535 then
@@ -330,7 +333,6 @@ struct
     let (rx_wnd_scale, tx_wnd_scale), opts =
       resolve_wnd_scaling options rx_wnd_scaleoffer
     in
-    Log.info (fun f -> f "rx_wnd_scale.");
     (* Set up the windowing variables *)
     let rx_isn = sequence in
     (* Initialise the window handler *)
@@ -338,7 +340,6 @@ struct
       Window.t ~rx_wnd_scale ~tx_wnd_scale ~rx_wnd ~tx_wnd ~rx_isn ~tx_mss
         ~tx_isn
     in
-    Log.info (fun f -> f "wnd.");
     (* When we transmit an ACK for a received segment, rx_ack is written to *)
     let rx_ack = Eio.Stream.create 1 in
     (* When we receive an ACK for a transmitted segment, tx_ack is written to *)
@@ -349,26 +350,21 @@ struct
     let send_ack = Eio.Stream.create 1 in
     (* The user application receive buffer and close notification *)
     let rx_buf_size = Window.rx_wnd wnd in
-    Log.info (fun f -> f "rx_buf_size.");
     let urx = User_buffer.Rx.create ~max_size:rx_buf_size ~wnd in
     (* The window handling thread *)
     let tx_wnd_update = Eio.Stream.create 1 in
     (* Set up transmit and receive queues *)
     let on_close () = clearpcb t id tx_isn in
-    Log.info (fun f -> f "state.");
     let state = State.t ~clock:t.clock ~on_close in
-    Log.info (fun f -> f "txq.");
     let txq =
       TXS.create ~sw ~clock:t.clock ~xmit:(Tx.xmit_pcb t.ip id) ~wnd ~state
         ~rx_ack ~tx_ack ~tx_wnd_update
     in
-    Log.info (fun f -> f "utx.");
     (* The user application transmit buffer *)
     let utx = UTX.create ~wnd ~txq ~max_size:16384l in
     let rxq = RXS.create ~rx_data ~wnd ~state ~tx_ack in
     (* Set up ACK module *)
     let ack = ACK.t ~sw ~clock:t.clock ~send_ack ~last:(Sequence.succ rx_isn) in
-    Log.info (fun f -> f "here.\n");
     (* Set up the keepalive state if requested *)
     let keepalive =
       match keepalive with
@@ -424,7 +420,6 @@ struct
     let tx_isn = params.tx_isn in
     let params = { params with tx_isn = Sequence.succ tx_isn } in
     let pcb, _ = new_pcb ~sw t params id keepalive in
-    Log.info (fun f -> f "new-pcb.\n");
     (* A hack here because we create the pcb only after the SYN-ACK is rx-ed*)
     STATE.tick ~sw pcb.state (State.Send_syn tx_isn);
     (* Add the PCB to our connection table *)
@@ -474,16 +469,13 @@ struct
           (* TODO: fix hardcoded value - it assumes that this value was
              sent in the SYN *)
           let rx_wnd_scaleoffer = wscale_default in
-          Eio.Fiber.fork ~sw:t.sw @@ fun () ->
-          ( Eio.Switch.run @@ fun sw ->
-            let pcb =
+          Eio.Fiber.fork_sub ~sw:t.sw ~on_error:ignore @@ fun sw ->
+           (let pcb =
               new_client_connection ~sw t
                 { tx_wnd; sequence; options; tx_isn; rx_wnd; rx_wnd_scaleoffer }
                 id ack_number keepalive
             in
-            Eio.Promise.resolve wakener (Ok (pcb, sw));
-            Log.info (fun f -> f "Promise resolved.\n") );
-          Log.info (fun f -> f "PCB finished.\n"))
+            Eio.Promise.resolve wakener (Ok (pcb, sw))))
         else
           (* Normally sending a RST reply to a random pkt would be in
              order but here we stay quiet since we are actively trying
@@ -560,7 +552,7 @@ struct
   let chunk_cs = Cstruct.create 10000
 
   class flow_obj ((flow, sw) : connection) =
-    object (_ : < Eio.Flow.source ; Eio.Flow.sink ; .. >)
+    object (_ : < Eio.Flow.source ; Eio.Flow.sink ; dst; .. >)
       method probe _ = None
 
       method copy (src : #Eio.Flow.source) =
@@ -585,6 +577,7 @@ struct
       method read_methods = []
       method shutdown (_ : [ `All | `Receive | `Send ]) = close ~sw flow
       method close = close ~sw flow
+      method dst = WIRE.dst flow.id, WIRE.dst_port flow.id
     end
 
   (* INPUT *)
