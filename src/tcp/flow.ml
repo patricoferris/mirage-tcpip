@@ -128,6 +128,7 @@ struct
 
     (* Output a SYN packet *)
     let send_syn { ip; _ } id ~tx_isn ~options ~window =
+      Logs.err (fun f -> f "Send SYN");
       WIRE.xmit ~ip id ~syn:true ~rx_ack:None ~seq:tx_isn ~window ~options
         (Cstruct.create 0)
 
@@ -737,8 +738,7 @@ struct
     Hashtbl.add t.connects id (wakener, tx_isn, keepalive);
     Stats.incr_connect ();
     match Tx.send_syn t id ~tx_isn ~options ~window with
-    | Ok () -> th
-    | Error _ (* keep trying *) ->
+    | Ok () | Error _ (* keep trying *) ->
         Eio.Fiber.fork ~sw:t.sw (fun () ->
             connecttimer t id tx_isn options window 0);
         th
