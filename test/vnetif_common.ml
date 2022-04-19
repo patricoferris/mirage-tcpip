@@ -128,7 +128,9 @@ module VNETIF_STACK (B : Vnetif_backends.Backend) :
     Pcap.LE.set_pcap_header_version_major header_buf Pcap.major_version;
     Pcap.LE.set_pcap_header_version_minor header_buf Pcap.minor_version;
     Eio.Flow.(copy (cstruct_source [ header_buf ])) channel;
+    let mutex = Eio.Eio_mutex.create () in
     let pcap_record channel buffer =
+      Eio.Eio_mutex.with_lock mutex @@ fun () ->
       let pcap_buf = Cstruct.create Pcap.sizeof_pcap_packet in
       let time = Unix.gettimeofday () in
       Pcap.LE.set_pcap_packet_incl_len pcap_buf
@@ -138,7 +140,8 @@ module VNETIF_STACK (B : Vnetif_backends.Backend) :
       Pcap.LE.set_pcap_packet_ts_sec pcap_buf (Int32.of_float time);
       let frac = (time -. float_of_int (truncate time)) *. 1000000.0 in
       Pcap.LE.set_pcap_packet_ts_usec pcap_buf (Int32.of_float frac);
-      try Eio.Flow.(copy (cstruct_source [ pcap_buf; buffer ])) channel
+      try 
+        Eio.Flow.(copy (cstruct_source [ pcap_buf; buffer ])) channel
       with End_of_file ->
         Printf.printf "Warning: Pcap output channel already closed.\n"
     in

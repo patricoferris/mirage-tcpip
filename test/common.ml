@@ -21,3 +21,16 @@ let sequence =
   Alcotest.testable Tcp.Sequence.pp eq
 
 let options = Alcotest.testable Tcp.Options.pp Tcp.Options.equal
+
+let run_dir program () =
+  Eio_linux.run @@ fun env ->
+  let clock = Eio.Stdenv.clock env in
+  let dir = Eio.Stdenv.fs env in
+  try
+    Eio.Switch.run @@ fun sw ->
+    program ~sw ~clock ~dir ();
+    Eio.Switch.fail sw Not_found
+  with Not_found -> ()
+
+let run program =
+  run_dir (fun ~sw ~clock ~dir:_ () -> program ~sw ~clock ())

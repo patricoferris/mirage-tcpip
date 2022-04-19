@@ -105,6 +105,7 @@ module Uniform_no_payload_packet_loss : Backend = struct
     let size = Cstruct.lenv iovec in
     if size <= no_payload_len && Random.float 1.0 < drop_p then (
       MProf.Trace.label "pkt_drop";
+      X.writev t id [Cstruct.create 1] |> ignore; (* Send invalid frame to see dropped packets. *)
       Ok () (* drop packet *))
     else X.writev t id iovec (* pass to real write *)
 

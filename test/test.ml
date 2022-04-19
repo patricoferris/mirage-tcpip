@@ -15,22 +15,22 @@
  *)
 
 let suite = [
-  (*"checksums"      , Test_checksums.suite   ;
+  "checksums"      , Test_checksums.suite   ;
   "ipv4"           , Test_ipv4.suite        ;
   "ipv6"           , Test_ipv6.suite        ;
   "icmpv4"         , Test_icmpv4.suite      ;
   "udp"            , Test_udp.suite         ;
   "tcp_window"     , Test_tcp_window.suite  ;
   "tcp_options"    , Test_tcp_options.suite ;
-  "mtu+tcp"        , Test_mtus.suite        ;*)
+  "mtu+tcp"        , Test_mtus.suite        ;
   "rfc5961"        , Test_rfc5961.suite     ;
- (* "socket"         , Test_socket.suite      ;
+ (* "socket"         , Test_socket.suite      ;*)
   "connect"        , Test_connect.suite     ;
-  "connect_ipv6"   , Test_connect_ipv6.suite     ;
+  "connect_ipv6"   , Test_connect_ipv6.suite;
   "deadlock"       , Test_deadlock.suite    ;
   "iperf"          , Test_iperf.suite       ;
-  "iperf_ipv6"     , Test_iperf_ipv6.suite       ;
-  "keepalive"      , Test_keepalive.suite   ;*)
+  "iperf_ipv6"     , Test_iperf_ipv6.suite  ;
+  "keepalive"      , Test_keepalive.suite   ;
 ]
 
 let run test () = test ()

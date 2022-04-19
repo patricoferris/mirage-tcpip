@@ -31,7 +31,7 @@ module Make(Log : Logs.LOG) (A : Arp.S) = struct
       begin
       match A.query arp ip with
       | Ok mac -> Ok mac
-      | Error e when Error.head e = A.Timeout ->
+      | Error e when Error.head e = Arp.Timeout ->
         Log.info (fun f ->
             f "IP.output: could not determine link-layer address for local \
                 network (%a) ip %a" Ipaddr.V4.Prefix.pp network
@@ -51,7 +51,7 @@ module Make(Log : Logs.LOG) (A : Arp.S) = struct
       | Some gateway ->
         match A.query arp gateway with
         | Ok mac -> Ok mac
-        | Error e when Error.head e = A.Timeout ->
+        | Error e when Error.head e = Arp.Timeout ->
           Log.info (fun f ->
               f "IP.output: could not send to %a: failed to contact gateway %a"
                 Ipaddr.V4.pp ip Ipaddr.V4.pp gateway);
