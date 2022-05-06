@@ -15,8 +15,6 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *)
 
-[@@@ocaml.warning "-3"]
-
 module Lwt = struct end
 
 let lwt_sequence_add_l s seq =
@@ -59,7 +57,7 @@ module Rx = struct
   let seglen s =
     match s with
     | None -> 0
-    | Some b -> Cstruct.len b
+    | Some b -> Cstruct.length b
 
   let add_r t s =
     if t.cur_size > t.max_size then
@@ -133,13 +131,13 @@ module Tx(Clock:Mirage_clock.MCLOCK) = struct
     { wnd; writers; txq; buffer; max_size; bufbytes }
 
   let len data =
-    Int32.of_int (Cstruct.len data)
+    Int32.of_int (Cstruct.length data)
 
   let lenv datav =
     match datav with
     |[] -> 0l
-    |[d] -> Int32.of_int (Cstruct.len d)
-    |ds -> Int32.of_int (List.fold_left (fun a b -> Cstruct.len b + a) 0 ds)
+    |[d] -> Int32.of_int (Cstruct.length d)
+    |ds -> Int32.of_int (List.fold_left (fun a b -> Cstruct.length b + a) 0 ds)
 
   (* Check how many bytes are available to write to output buffer *)
   let available t =
@@ -245,7 +243,7 @@ module Tx(Clock:Mirage_clock.MCLOCK) = struct
         end
       |hd::tl ->
         let curlen = Cstruct.lenv acc in
-        let tlen = Cstruct.len hd + curlen in
+        let tlen = Cstruct.length hd + curlen in
         if tlen > mss then begin
           let a,b = Cstruct.split hd (mss - curlen) in
           transmit (a::acc);
