@@ -122,7 +122,7 @@ module Drop_1_second_after_1_megabyte : Backend = struct
     mutable sent_bytes : int;
     mutable is_dropping : bool;
     mutable done_dropping : bool;
-    perform_drop : unit Eio.Condition.t;
+    perform_drop : Eio.Condition.t;
   }
 
   type macaddr = X.macaddr
@@ -142,7 +142,7 @@ module Drop_1_second_after_1_megabyte : Backend = struct
       t.sent_bytes > byte_limit && t.is_dropping = false
       && t.done_dropping = false
     then (
-      Eio.Condition.broadcast t.perform_drop ();
+      Eio.Condition.broadcast t.perform_drop;
       true)
     else if t.is_dropping = true then true
     else false
@@ -166,7 +166,7 @@ module Drop_1_second_after_1_megabyte : Backend = struct
       }
     in
     Eio.Fiber.fork ~sw (fun () ->
-        Eio.Condition.wait perform_drop;
+        Eio.Condition.await perform_drop;
         Logs.info (fun f ->
             f "Backend dropping packets for %f sec" time_to_sleep);
         t.is_dropping <- true;

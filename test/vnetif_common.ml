@@ -128,9 +128,9 @@ module VNETIF_STACK (B : Vnetif_backends.Backend) :
     Pcap.LE.set_pcap_header_version_major header_buf Pcap.major_version;
     Pcap.LE.set_pcap_header_version_minor header_buf Pcap.minor_version;
     Eio.Flow.(copy (cstruct_source [ header_buf ])) channel;
-    let mutex = Eio.Eio_mutex.create () in
+    let mutex = Eio.Mutex.create () in
     let pcap_record channel buffer =
-      Eio.Eio_mutex.with_lock mutex @@ fun () ->
+      Eio.Mutex.with_lock mutex @@ fun () ->
       let pcap_buf = Cstruct.create Pcap.sizeof_pcap_packet in
       let time = Unix.gettimeofday () in
       Pcap.LE.set_pcap_packet_incl_len pcap_buf
