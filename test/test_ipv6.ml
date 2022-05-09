@@ -213,11 +213,12 @@ let dad_na_is_received ~sw ~clock () =
            write_raw dst [buf] |> ignore));
     (fun () -> 
       try 
-        get_stack backend address |> ignore; 
+        get_stack ~sw ~clock backend address |> ignore; 
         Alcotest.fail "Expected stack initialization failure"
       with _ -> ());
     (fun () -> 
-      Eio.Time.sleep clock 0.5;
+      Eio.Time.sleep clock 5.;
+      Eio.Fiber.check ();
       Alcotest.fail "stack initialization should have failed")
   ]
 
