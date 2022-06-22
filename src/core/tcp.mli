@@ -14,7 +14,8 @@ module Keepalive: sig
   (** Configuration for TCP keep-alives *)
 end
 
-type Error.t += Refused | Timeout
+exception Refused 
+exception Timeout
 
 (** Transmission Control Protocol layer: reliable ordered streaming
     communication. *)
@@ -32,7 +33,7 @@ module type S = sig
   (** Disconnect from the TCP layer. While this might take some time to
       complete, it can never result in an error. *)
 
-  val create_connection: ?keepalive:Keepalive.t -> t -> ipaddr * int -> <Eio.Flow.two_way; Eio.Flow.close; dst> Error.r
+  val create_connection: ?keepalive:Keepalive.t -> t -> ipaddr * int -> <Eio.Flow.two_way; Eio.Flow.close; dst>
   (** [create_connection ~keepalive t (addr,port)] opens a TCP connection
       to the specified endpoint.
 

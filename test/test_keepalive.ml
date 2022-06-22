@@ -77,7 +77,7 @@ module Test_connect = struct
   let err_write_eof () = failf "client tried to write, got EOF"
 
   let err e =
-    let err = Format.asprintf "%a" Error.pp_trace e in
+    let err = Format.asprintf "%s" (Printexc.to_string e) in
     failf "Error while reading: %s" err  
 
   let accept flow =
@@ -108,7 +108,7 @@ module Test_connect = struct
           (fun () ->
             let keepalive = { Tcpip.Tcp.Keepalive.after = 0L; interval = Duration.of_sec 1; probes = 3 } in
             let conn = V.Stackv4.TCPV4.create_connection ~keepalive (V.Stackv4.tcpv4 s2) in
-            let flow = or_error "connect" conn (Ipaddr.V4.Prefix.address server_cidr, 80) in
+            let flow = conn (Ipaddr.V4.Prefix.address server_cidr, 80) in
             Logs.debug (fun f -> f "Connected to other end...");
             Vnetif_backends.On_off_switch.send_packets := false;
             let buf = Cstruct.create 1000 in
@@ -124,7 +124,8 @@ module Test_connect = struct
 
 end
 
-let test_tcp_keepalive_timeout ~sw ~clock ~dir () =
+let test_tcp_keepalive_timeout ~sw ~env () =
+  let clock, dir = env#clock, env#fs in
   let backend = Test_connect.V.create_backend ~sw ~clock () in
   Test_connect.record_pcap ~dir backend
     "test_tcp_keepalive_timeout.pcap"
@@ -132,7 +133,7 @@ let test_tcp_keepalive_timeout ~sw ~clock ~dir () =
 
 let suite_2 = [
   "check that TCP keepalives detect a network failure", `Slow,
-  run_dir test_tcp_keepalive_timeout;
+  run test_tcp_keepalive_timeout;
 ]
 
 let suite = suite_1 @ suite_2

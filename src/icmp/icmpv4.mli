@@ -18,7 +18,7 @@ module type S = sig
   (** [input t src dst buffer] reacts to the ICMP message in
       [buffer]. *)
 
-  val write : t -> ?src:ipaddr -> dst:ipaddr -> ?ttl:int -> Cstruct.t -> unit Error.r
+  val write : t -> ?src:ipaddr -> dst:ipaddr -> ?ttl:int -> Cstruct.t -> unit
   (** [write t ~src ~dst ~ttl buffer] sends the ICMP message in [buffer] to [dst]
       over IP. Passes the time-to-live ([ttl]) to the IP stack if given. *)
 end

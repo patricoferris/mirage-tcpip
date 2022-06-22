@@ -60,6 +60,7 @@ module Rx = struct
     | Some b -> Cstruct.length b
 
   let add_r t s =
+    assert ((Domain.self () :> int) = 0);
     if t.cur_size > t.max_size then
       let th, u = Eio.Promise.create ~label:"User_buffer.add_r" () in
       let _node = Lwt_dllist.add_r u t.writers in
@@ -80,9 +81,12 @@ module Rx = struct
       | Some u ->
         (Eio.Promise.resolve u s)
 
+
+  let label = "User_buffer.take_l"
+
   let take_l t =
     if Lwt_dllist.is_empty t.q then begin
-      let th,u = Eio.Promise.create ~label:"User_buffer.take_l" () in
+      let th,u = Eio.Promise.create ~label () in
       let _node = Lwt_dllist.add_r u t.readers in
       (*Lwt.on_cancel th (fun _ -> Lwt_dllist.remove node);*)
       Eio.Promise.await th

@@ -9,7 +9,7 @@ module Stack = Vnetif_common.VNETIF_STACK(Backend)
 let default_mtu = 1500
 
 let err_fail e =
-  let err = Format.asprintf "%a" Error.pp_trace e in
+  let err = Format.asprintf "%s" (Printexc.to_string e) in
   Alcotest.fail err
 
 let buffer = Cstruct.create 10000
@@ -18,13 +18,11 @@ let rec read_all flow so_far =
   match Eio.Flow.read flow buffer with
   | s -> read_all flow (Cstruct.of_string (Cstruct.copy buffer 0 s) :: so_far)
   | exception End_of_file -> List.rev so_far
-  | exception exn -> err_fail (Error.(wrap (Exception exn)))
 
 let read_one flow =
   match Eio.Flow.read flow buffer with
   | s -> Cstruct.sub buffer 0 s
   | exception End_of_file -> Alcotest.fail "received EOF when we expected at least some data from read"
-  | exception exn -> err_fail (Error.(wrap (Exception exn)))
 
 let get_stacks ~sw ~clock ?client_mtu ?server_mtu backend =
   let or_default = function | None -> default_mtu | Some n -> n in
@@ -40,26 +38,25 @@ let start_server ~f server =
   Stack.Stackv4.listen server
 
 let start_client client =
-  match Stack.Stackv4.TCPV4.create_connection (Stack.Stackv4.tcpv4 client) (Ipaddr.V4.Prefix.address server_cidr, server_port) with
-  | Ok connection -> connection
-  | Error e -> err_fail e
+  Stack.Stackv4.TCPV4.create_connection (Stack.Stackv4.tcpv4 client) (Ipaddr.V4.Prefix.address server_cidr, server_port)
 
-let connect ~sw ~clock () =
+let connect ~sw ~env () =
+  let clock = env#clock in
   let backend = Backend.create ~sw ~clock () in
   let (server, client) = get_stacks ~sw ~clock ~server_mtu:9000 backend in
   Eio.Fiber.fork ~sw (fun () -> start_server ~f:(fun _ -> ()) server);
   let flow = start_client client in
   Eio.Flow.close flow
 
-let big_server_response ~sw ~clock () =
+let big_server_response ~sw ~env () =
+  let clock = env#clock in
   let response = Cstruct.create 7000 in
   Cstruct.memset response 255;
   let backend = Backend.create ~sw ~clock () in
   let (server, client) = get_stacks  ~sw ~clock ~client_mtu:1500 ~server_mtu:9000 backend in
   let f flow =
-    match Eio.Flow.(copy (cstruct_source [response])) flow with
-    | exception End_of_file -> err_fail (Error.(wrap (Exception End_of_file)))
-    | () -> Eio.Flow.close flow
+    Eio.Flow.(copy (cstruct_source [response])) flow;
+    Eio.Flow.close flow
   in
   Eio.Fiber.fork ~sw (fun () -> start_server ~f server);
   let flow = start_client client in
@@ -67,28 +64,28 @@ let big_server_response ~sw ~clock () =
   Alcotest.(check int) "received size matches sent size" (Cstruct.length response) (Cstruct.length (Cstruct.concat l));
   Eio.Flow.close flow
 
-let big_client_request_chunked ~sw ~clock () =
+let big_client_request_chunked ~sw ~env () =
+  let clock = env#clock in
   let request = Cstruct.create 3750 in
   Cstruct.memset request 255;
   let backend = Backend.create ~sw ~clock () in
   let (server, client) = get_stacks ~sw ~clock ~client_mtu:1500 ~server_mtu:9000 backend in
   let f flow =
-    match Eio.Flow.(copy (cstruct_source [request])) flow with
-    | exception End_of_file -> err_fail (Error.(wrap (Exception End_of_file)))
-    | () -> Eio.Flow.close flow
+    Eio.Flow.(copy (cstruct_source [request])) flow;
+    Eio.Flow.close flow
   in
   Eio.Fiber.fork ~sw (fun () -> start_server ~f:(fun _flow -> ()) server);
   f (start_client client)
 
-let big_server_response_not_chunked ~sw ~clock () =
+let big_server_response_not_chunked ~sw ~env () =
+  let clock = env#clock in
   let response = Cstruct.create 7000 in
   Cstruct.memset response 255;
   let backend = Backend.create ~sw ~clock () in
   let (server, client) = get_stacks ~sw ~clock ~client_mtu:9000 ~server_mtu:9000 backend in
   let f flow =
-    match Eio.Flow.(copy (cstruct_source [response])) flow with
-    | exception End_of_file -> err_fail (Error.(wrap (Exception End_of_file)))
-    | () -> Eio.Flow.close flow
+    Eio.Flow.(copy (cstruct_source [response])) flow;
+    Eio.Flow.close flow
   in
   Eio.Fiber.fork ~sw (fun () -> start_server ~f server);
   let flow = start_client client in 
@@ -96,18 +93,20 @@ let big_server_response_not_chunked ~sw ~clock () =
   Alcotest.(check int) "received size matches sent size" (Cstruct.length response) (Cstruct.length buf);
   Eio.Flow.close flow
 
-let long_comms amt timeout ~sw ~clock ~dir () =
+let long_comms amt timeout ~sw ~env () =
   (* use the iperf tests to test long-running communication between
    * the two stacks with their different link settings.
    * this helps us find bugs in situations like the TCP window expanding
    * to be larger than the MTU, and the implementation failing to 
    * limit the size of the sent packet in that case. *)
   let module Test = Test_iperf.Test_iperf(Backend) in
+  let clock = env#clock in
+  let dir = Eio.Stdenv.fs env in
   let backend = Backend.create ~sw ~clock () in
   let (server, client) = get_stacks ~sw ~clock ~client_mtu:1500 ~server_mtu:9000 backend in
   Test.V.record_pcap ~dir backend
     (Printf.sprintf "tcp_mtus_long_comms_%d.pcap" amt)
-    (Test.tcp_iperf ~sw ~clock ~server ~client amt timeout)
+    (Test.tcp_iperf ~clock ~server ~client amt timeout)
 
 open Common
 
@@ -116,6 +115,6 @@ let suite = [
   "large server responses are received", `Quick, run big_server_response;
   "large client requests are chunked properly", `Quick, run big_client_request_chunked;
   "large messages aren't unnecessarily segmented", `Quick, run big_server_response_not_chunked;
-  "iperf test doesn't crash", `Quick, run_dir (long_comms Test_iperf.amt_quick 120.0);
+  "iperf test doesn't crash", `Quick, run (long_comms Test_iperf.amt_quick 120.0);
 ]
  

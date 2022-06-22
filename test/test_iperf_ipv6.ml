@@ -61,16 +61,16 @@ module Test_iperf_ipv6 (B : Vnetif_backends.Backend) = struct
   let err_eof () = failf "EOF while writing to TCP flow"
 
   let err_connect e ip port () =
-    let err = Format.asprintf "%a" Error.pp_trace e in
+    let err = Format.asprintf "%s" (Printexc.to_string e) in
     let ip  = Ipaddr.V6.to_string ip in
     failf "Unable to connect to %s:%d: %s" ip port err
 
   let err_write e () =
-    let err = Format.asprintf "%a" Error.pp_trace e in
+    let err = Format.asprintf "%s" (Printexc.to_string e) in
     failf "Error while writing to TCP flow: %s" err
 
   let err_read e () =
-    let err = Format.asprintf "%a" Error.pp_trace e in
+    let err = Format.asprintf "%s" (Printexc.to_string e) in
     failf "Error in server while reading: %s" err
 
   let write_and_check flow buf =
@@ -81,12 +81,12 @@ module Test_iperf_ipv6 (B : Vnetif_backends.Backend) = struct
       err_eof ()
     | exception exn -> 
       Eio.Flow.close flow; 
-      err_write (Error.wrap (Error.Exception exn)) ()
+      raise exn
   
   let tcp_connect t (ip, port) =
     match V.Stackv6.TCP.create_connection t (ip, port) with
-    | Error e -> err_connect e ip port ()
-    | Ok f    -> f
+    | exception e -> err_connect e ip port ()
+    | f    -> f
 
   let iperfclient s amt dest_ip dport =
     let iperftx flow =
@@ -190,14 +190,16 @@ module Test_iperf_ipv6 (B : Vnetif_backends.Backend) = struct
     Eio.Promise.await server_done (* exit cleanly *)
 end
 
-let test_tcp_iperf_ipv6_two_stacks_basic ~sw ~clock ~dir amt timeout () =
+let test_tcp_iperf_ipv6_two_stacks_basic ~sw ~env amt timeout () =
+  let clock, dir = env#clock, env#fs in
   let module Test = Test_iperf_ipv6 (Vnetif_backends.Basic) in
   let { backend; Test.client; Test.server } = Test.default_network ~sw ~clock () in
   Test.V.record_pcap ~dir backend
     (Printf.sprintf "tcp_iperf_ipv6_two_stacks_basic_%d.pcap" amt)
     (Test.tcp_iperf  ~sw ~clock ~server ~client amt timeout)
 
-let test_tcp_iperf_ipv6_two_stacks_mtu  ~sw ~clock ~dir amt timeout () =
+let test_tcp_iperf_ipv6_two_stacks_mtu  ~sw ~env amt timeout () =
+  let clock, dir = env#clock, env#fs in
   let mtu = 1500 in
   let module Test = Test_iperf_ipv6 (Vnetif_backends.Frame_size_enforced) in
   let backend = Vnetif_backends.Frame_size_enforced.create ~sw ~clock () in
@@ -207,28 +209,32 @@ let test_tcp_iperf_ipv6_two_stacks_mtu  ~sw ~clock ~dir amt timeout () =
     (Printf.sprintf "tcp_iperf_ipv6_two_stacks_mtu_%d.pcap" amt)
     (Test.tcp_iperf ~sw ~clock ~server ~client amt timeout)
 
-let test_tcp_iperf_ipv6_two_stacks_trailing_bytes ~sw ~clock ~dir amt timeout () =
+let test_tcp_iperf_ipv6_two_stacks_trailing_bytes ~sw ~env amt timeout () =
+  let clock, dir = env#clock, env#fs in
   let module Test = Test_iperf_ipv6 (Vnetif_backends.Trailing_bytes) in
   let { backend; Test.client; Test.server } = Test.default_network ~sw ~clock () in
   Test.V.record_pcap ~dir backend
     (Printf.sprintf "tcp_iperf_ipv6_two_stacks_trailing_bytes_%d.pcap" amt)
     (Test.tcp_iperf ~sw ~clock ~server ~client amt timeout)
 
-let test_tcp_iperf_ipv6_two_stacks_uniform_packet_loss ~sw ~clock ~dir amt timeout () =
+let test_tcp_iperf_ipv6_two_stacks_uniform_packet_loss ~sw ~env amt timeout () =
+  let clock, dir = env#clock, env#fs in
   let module Test = Test_iperf_ipv6 (Vnetif_backends.Uniform_packet_loss) in
   let { backend; Test.client; Test.server } = Test.default_network ~sw ~clock () in
   Test.V.record_pcap ~dir backend
     (Printf.sprintf "tcp_iperf_ipv6_two_stacks_uniform_packet_loss_%d.pcap" amt)
     (Test.tcp_iperf ~sw ~clock ~server ~client amt timeout)
 
-let test_tcp_iperf_ipv6_two_stacks_uniform_packet_loss_no_payload ~sw ~clock ~dir amt timeout () =
+let test_tcp_iperf_ipv6_two_stacks_uniform_packet_loss_no_payload ~sw ~env amt timeout () =
+  let clock, dir = env#clock, env#fs in
   let module Test = Test_iperf_ipv6 (Vnetif_backends.Uniform_no_payload_packet_loss) in
   let { backend; Test.client; Test.server } = Test.default_network ~sw ~clock () in
   Test.V.record_pcap ~dir backend
     (Printf.sprintf "tcp_iperf_ipv6_two_stacks_uniform_packet_loss_no_payload_%d.pcap" amt)
     (Test.tcp_iperf ~sw ~clock ~server ~client amt timeout)
 
-let test_tcp_iperf_ipv6_two_stacks_drop_1sec_after_1mb ~sw ~clock ~dir amt timeout () =
+let test_tcp_iperf_ipv6_two_stacks_drop_1sec_after_1mb ~sw ~env amt timeout () =
+  let clock, dir = env#clock, env#fs in
   let module Test = Test_iperf_ipv6 (Vnetif_backends.Drop_1_second_after_1_megabyte) in
   let { backend; Test.client; Test.server } = Test.default_network ~sw ~clock () in
   Test.V.record_pcap ~dir backend
@@ -243,30 +249,30 @@ open Common
 let suite = [
 
   "iperf with two stacks, basic tests", `Quick,
-  run_dir @@ test_tcp_iperf_ipv6_two_stacks_basic amt_quick 120.0;
+  run @@ test_tcp_iperf_ipv6_two_stacks_basic amt_quick 120.0;
 
   "iperf with two stacks, over an MTU-enforcing backend", `Quick,
-  run_dir @@ test_tcp_iperf_ipv6_two_stacks_mtu amt_quick 120.0;
+  run @@ test_tcp_iperf_ipv6_two_stacks_mtu amt_quick 120.0;
 
   "iperf with two stacks, testing trailing_bytes", `Quick,
-  run_dir @@ test_tcp_iperf_ipv6_two_stacks_trailing_bytes amt_quick 120.0;
+  run @@ test_tcp_iperf_ipv6_two_stacks_trailing_bytes amt_quick 120.0;
 
   "iperf with two stacks and uniform packet loss", `Quick,
-  run_dir @@ test_tcp_iperf_ipv6_two_stacks_uniform_packet_loss amt_quick 120.0;
+  run @@ test_tcp_iperf_ipv6_two_stacks_uniform_packet_loss amt_quick 120.0;
 
   "iperf with two stacks and uniform packet loss of packets with no payload", `Slow,
-  run_dir @@ test_tcp_iperf_ipv6_two_stacks_uniform_packet_loss_no_payload amt_quick 240.0;
+  run @@ test_tcp_iperf_ipv6_two_stacks_uniform_packet_loss_no_payload amt_quick 240.0;
 
   "iperf with two stacks and uniform packet loss of packets with no payload, longer", `Slow,
-  run_dir @@ test_tcp_iperf_ipv6_two_stacks_uniform_packet_loss_no_payload amt_slow 240.0;
+  run @@ test_tcp_iperf_ipv6_two_stacks_uniform_packet_loss_no_payload amt_slow 240.0;
 
   "iperf with two stacks, basic tests, longer", `Slow,
-  run_dir @@ test_tcp_iperf_ipv6_two_stacks_basic amt_slow 240.0;
+  run @@ test_tcp_iperf_ipv6_two_stacks_basic amt_slow 240.0;
 
   "iperf with two stacks and uniform packet loss, longer", `Slow,
-  run_dir @@ test_tcp_iperf_ipv6_two_stacks_uniform_packet_loss amt_slow 240.0;
+  run @@ test_tcp_iperf_ipv6_two_stacks_uniform_packet_loss amt_slow 240.0;
 
   "iperf with two stacks drop 1 sec after 1 mb", `Quick,
-  run_dir @@ test_tcp_iperf_ipv6_two_stacks_drop_1sec_after_1mb amt_quick 120.0;
+  run @@ test_tcp_iperf_ipv6_two_stacks_drop_1sec_after_1mb amt_quick 120.0;
 
 ]

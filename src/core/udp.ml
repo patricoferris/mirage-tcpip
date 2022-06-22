@@ -7,5 +7,5 @@ module type S = sig
   val unlisten : t -> port:int -> unit
   val input: t -> src:ipaddr -> dst:ipaddr -> Cstruct.t -> unit
   val write: ?src:ipaddr -> ?src_port:int -> ?ttl:int -> dst:ipaddr -> dst_port:int -> t -> Cstruct.t ->
-    unit Error.r
+    unit
 end

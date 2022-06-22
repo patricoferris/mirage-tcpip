@@ -3,7 +3,7 @@ module B = Vnetif_backends.Basic
 module V = Vnetif.Make(B)
 module E = Ethernet.Make(V)
 
-module Ipv6 = Ipv6.Make(V)(E)(Mirage_random_test)(Mclock)
+module Ipv6 = Ipv6.Make(V)(E)(Mirage_random_test)
 module Udp = Udp.Make(Ipv6)(Mirage_random_test)
 
 let ip =
@@ -57,13 +57,13 @@ let check_for_one_udp_packet on_received_one ~src ~dst buf =
 
 let send_forever ~clock sender receiver_address udp_message =
   let rec loop () =
-    Udp.write sender.udp ~dst:receiver_address ~dst_port:1234 udp_message
-    |> Result.get_ok;
+    Udp.write sender.udp ~dst:receiver_address ~dst_port:1234 udp_message;
     Eio.Time.sleep clock 0.050;
     loop () in
   loop ()
 
-let pass_udp_traffic ~sw ~clock () =
+let pass_udp_traffic ~sw ~env () =
+  let clock = env#clock in
   let sender_address = Ipaddr.V6.of_string_exn "fc00::23" in
   let receiver_address = Ipaddr.V6.of_string_exn "fc00::45" in
   let backend = B.create ~sw ~clock () in
@@ -95,8 +95,9 @@ let create_ethernet backend =
 let solicited_node_prefix =
   Ipaddr.V6.(Prefix.make 104 (of_int16 (0xff02, 0, 0, 0, 0, 1, 0xff00, 0)))
 
-let dad_na_is_sent ~sw ~clock () =
+let dad_na_is_sent ~sw ~env () =
   let address = Ipaddr.V6.of_string_exn "fc00::23" in
+  let clock = env#clock in
   let backend = B.create ~sw ~clock () in
   let stack = get_stack ~sw ~clock backend address in
   let (listen_raw, write_raw, _) = create_ethernet backend in
@@ -158,7 +159,8 @@ let multicast_mac =
     Cstruct.BE.set_uint32 pbuf 2 n;
     Macaddr_cstruct.of_cstruct_exn pbuf
 
-let dad_na_is_received ~sw ~clock () =
+let dad_na_is_received ~sw ~env () =
+  let clock = env#clock in
   let address = Ipaddr.V6.of_string_exn "fc00::23" in
   let backend = B.create ~sw ~clock () in
   let (listen_raw, write_raw, mac) = create_ethernet backend in

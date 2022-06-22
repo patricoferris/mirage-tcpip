@@ -42,11 +42,6 @@ module Test_iperf (B : Vnetif_backends.Backend) = struct
     client : V.Stackv4.t;
   }
 
-  let default_network ~sw ~clock ?mtu ?(backend = B.create ~sw ~clock ()) () =
-    let client = V.create_stack ~sw ~clock ?mtu ~cidr:client_cidr ~gateway backend in
-    let server = V.create_stack ~sw ~clock ?mtu ~cidr:server_cidr ~gateway backend in
-    {backend; server; client}
-
   let msg =
     let m = "01234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ" in
     let rec build l = function
@@ -60,16 +55,16 @@ module Test_iperf (B : Vnetif_backends.Backend) = struct
   let err_eof () = failf "EOF while writing to TCP flow"
 
   let err_connect e ip port () =
-    let err = Format.asprintf "%a" Error.pp_trace e in
+    let err = Format.asprintf "%s" (Printexc.to_string e) in
     let ip  = Ipaddr.V4.to_string ip in
     failf "Unable to connect to %s:%d: %s" ip port err
 
   let err_write e () =
-    let err = Format.asprintf "%a" Error.pp_trace e in
+    let err = Format.asprintf "%s" (Printexc.to_string e) in
     failf "Error while writing to TCP flow: %s" err
 
   let err_read e () =
-    let err = Format.asprintf "%a" Error.pp_trace e in
+    let err = Format.asprintf "%s" (Printexc.to_string e) in
     failf "Error in server while reading: %s" err
 
   let write_and_check flow buf =
@@ -80,12 +75,12 @@ module Test_iperf (B : Vnetif_backends.Backend) = struct
       err_eof ()
     | exception exn -> 
       Eio.Flow.close flow; 
-      err_write (Error.wrap (Error.Exception exn)) ()
+      err_write exn ()
 
   let tcp_connect t (ip, port) =
     match V.Stackv4.TCPV4.create_connection t (ip, port) with
-    | Error e -> err_connect e ip port ()
-    | Ok f    -> f
+    | exception e -> err_connect e ip port ()
+    | f    -> f
 
   let iperfclient s amt dest_ip dport =
     let iperftx flow =
@@ -128,8 +123,8 @@ module Test_iperf (B : Vnetif_backends.Backend) = struct
       bytes=0L; packets=0L; bin_bytes=0L; bin_packets=0L; start_time = t0;
       last_time = t0
     } in
+    let buffer = Cstruct.create_unsafe 2048 in    
     let rec iperf_h flow =
-      let buffer = Cstruct.create 2048 in
       match Eio.Flow.read flow buffer with
       | exception End_of_file ->
         let ts_now = Clock.elapsed_ns () in
@@ -148,21 +143,22 @@ module Test_iperf (B : Vnetif_backends.Backend) = struct
           st.bin_packets <- (Int64.add st.bin_packets 1L);
           let ts_now = Clock.elapsed_ns () in
           (if (Int64.sub ts_now st.last_time >= 1_000_000_000L) then
-             print_data st ts_now);
+              print_data st ts_now);
           iperf_h flow
         end
     in
     iperf_h flow;
     Eio.Promise.resolve server_done_u ()
 
-  let tcp_iperf ~sw ~clock ~server ~client amt timeout () =
+
+  let tcp_iperf_domains ~clock ~domain_mgr ~backend amt timeout () =
     let port = 5001 in
 
     let server_ready, server_ready_u = Eio.Promise.create () in
     let server_done, server_done_u = Eio.Promise.create () in
-    let server_s, client_s = server, client in
 
     let ip_of s = V.Stackv4.IPV4.get_ip (V.Stackv4.ipv4 s) |> List.hd in
+    let server_ip = Ipaddr.V4.Prefix.address server_cidr in
 
     Eio.Fiber.any [
       (fun () -> 
@@ -170,83 +166,141 @@ module Test_iperf (B : Vnetif_backends.Backend) = struct
         failf "iperf test timed out after %f seconds" timeout);
       
       (fun () -> 
+        Eio.Domain_manager.run domain_mgr @@ fun () ->
+        (Common.switch_run_cancel_on_return @@ fun sw ->
+        let client_s = V.create_stack ~sw ~clock ~cidr:client_cidr ~gateway backend 
+        in
         Eio.Promise.await server_ready;
         Eio.Time.sleep clock 0.1; (* Give server 0.1 s to call listen *)
         Logs.info (fun f -> f  "I am client with IP %a, trying to connect to server @ %a:%d"
-          Ipaddr.V4.pp (ip_of client_s) Ipaddr.V4.pp (ip_of server_s) port);
+          Ipaddr.V4.pp (ip_of client_s) Ipaddr.V4.pp server_ip port);
         Eio.Fiber.fork ~sw (fun () -> V.Stackv4.listen client_s);
-        iperfclient client_s amt (ip_of server) port);
+        iperfclient client_s amt server_ip port;
+        Gc.print_stat stderr);
+        Eio.Promise.await server_done
+      );
       
-      (fun () -> 
-        Logs.info (fun f -> f  "I am server with IP %a, expecting connections on port %d"
+      (fun () ->  
+        Eio.Switch.run @@ fun sw ->
+        let server_s = V.create_stack ~sw ~clock ~cidr:server_cidr ~gateway backend 
+        in
+         Logs.info (fun f -> f  "I am server with IP %a, expecting connections on port %d"
           Ipaddr.V4.pp (V.Stackv4.IPV4.get_ip (V.Stackv4.ipv4 server_s) |> List.hd)
           port);
         V.Stackv4.TCPV4.listen (V.Stackv4.tcpv4 server_s) ~port (iperf server_s server_done_u);
         Eio.Promise.resolve server_ready_u ();
-        V.Stackv4.listen server_s) ];
+        V.Stackv4.listen server_s )  ];
+    Logs.info (fun f -> f  "Waiting for server_done...");
+    Eio.Promise.await server_done (* exit cleanly *)
+
+  let tcp_iperf ~clock ~client ~server amt timeout () =
+    let port = 5001 in
+
+    let server_ready, server_ready_u = Eio.Promise.create () in
+    let server_done, server_done_u = Eio.Promise.create () in
+
+    let ip_of s = V.Stackv4.IPV4.get_ip (V.Stackv4.ipv4 s) |> List.hd in
+    let server_ip = ip_of server
+    in
+
+    Eio.Fiber.any [
+      (fun () -> 
+        Eio.Time.sleep clock timeout; (* timeout *)
+        failf "iperf test timed out after %f seconds" timeout);
+      
+      (fun () -> 
+        (Common.switch_run_cancel_on_return @@ fun sw ->
+        Eio.Promise.await server_ready;
+        Eio.Time.sleep clock 0.1; (* Give server 0.1 s to call listen *)
+        Logs.info (fun f -> f  "I am client with IP %a, trying to connect to server @ %a:%d"
+          Ipaddr.V4.pp (ip_of client) Ipaddr.V4.pp server_ip port);
+        Eio.Fiber.fork ~sw (fun () -> V.Stackv4.listen client);
+        iperfclient client amt server_ip port;
+        Gc.print_stat stderr);
+        Eio.Promise.await server_done
+      );
+      
+      (fun () ->
+        Logs.info (fun f -> f  "I am server with IP %a, expecting connections on port %d"
+          Ipaddr.V4.pp (V.Stackv4.IPV4.get_ip (V.Stackv4.ipv4 server) |> List.hd)
+          port);
+        V.Stackv4.TCPV4.listen (V.Stackv4.tcpv4 server) ~port (iperf server server_done_u);
+        Eio.Promise.resolve server_ready_u ();
+        V.Stackv4.listen server )  ];
     Logs.info (fun f -> f  "Waiting for server_done...");
     Eio.Promise.await server_done (* exit cleanly *)
 end
 
-let test_tcp_iperf_two_stacks_basic amt timeout ~dir ~sw ~clock () =
+let () = (* TODO: race condition ?*)
+  let mutex = Mutex.create () in
+  Logs.set_reporter_mutex 
+    ~lock:(fun () -> Mutex.lock mutex) 
+    ~unlock:(fun () -> Mutex.unlock mutex)
+
+let test_tcp_iperf_two_stacks_basic amt timeout ~sw ~env () =
+  let clock = Eio.Stdenv.clock env in
+  let dir = Eio.Stdenv.fs env in
+  let domain_mgr = Eio.Stdenv.domain_mgr env in
   let module Test = Test_iperf (Vnetif_backends.Basic) in
-  let { backend; Test.client; Test.server } = Test.default_network ~sw ~clock () in
+  let backend = Vnetif_backends.Basic.create ~sw ~clock () in
   Test.V.record_pcap ~dir backend
     (Printf.sprintf "tcp_iperf_two_stacks_basic_%d.pcap" amt)
-    (Test.tcp_iperf ~sw ~clock ~server ~client amt timeout)
+    (Test.tcp_iperf_domains ~domain_mgr ~clock ~backend amt timeout)
 
-let test_tcp_iperf_two_stacks_mtu amt timeout ~dir ~sw ~clock () =
+let test_tcp_iperf_two_stacks_mtu amt timeout ~sw ~env () =
+  let clock = Eio.Stdenv.clock env in
+  let dir = Eio.Stdenv.fs env in
+  let domain_mgr = Eio.Stdenv.domain_mgr env in
   let mtu = 1500 in
   let module Test = Test_iperf (Vnetif_backends.Frame_size_enforced) in
   let backend = Vnetif_backends.Frame_size_enforced.create ~sw ~clock () in
   Vnetif_backends.Frame_size_enforced.set_max_ip_mtu backend mtu;
-  let { backend; Test.client; Test.server } = Test.default_network ~sw ~clock ?mtu:(Some mtu) ?backend:(Some backend) () in
   Test.V.record_pcap ~dir backend
     (Printf.sprintf "tcp_iperf_two_stacks_mtu_%d.pcap" amt)
-    (Test.tcp_iperf ~sw ~clock ~server ~client amt timeout)
+    (Test.tcp_iperf_domains ~domain_mgr ~clock ~backend amt timeout)
 
-let test_tcp_iperf_two_stacks_trailing_bytes amt timeout ~dir ~sw ~clock () =
-  let module Test = Test_iperf (Vnetif_backends.Trailing_bytes) in
-  let { backend; Test.client; Test.server } = Test.default_network ~sw ~clock() in
-  Test.V.record_pcap ~dir backend
-    (Printf.sprintf "tcp_iperf_two_stacks_trailing_bytes_%d.pcap" amt)
-    (Test.tcp_iperf ~sw ~clock ~server ~client amt timeout)
-
-let test_tcp_iperf_two_stacks_uniform_packet_loss amt timeout ~dir ~sw ~clock () =
-  let module Test = Test_iperf (Vnetif_backends.Uniform_packet_loss) in
-  let { backend; Test.client; Test.server } = Test.default_network ~sw ~clock() in
-  Test.V.record_pcap ~dir backend
-    (Printf.sprintf "tcp_iperf_two_stacks_uniform_packet_loss_%d.pcap" amt)
-    (Test.tcp_iperf ~sw ~clock ~server ~client amt timeout)
-
-let test_tcp_iperf_two_stacks_uniform_packet_loss_no_payload amt timeout ~dir ~sw ~clock () =
-  let module Test = Test_iperf (Vnetif_backends.Uniform_no_payload_packet_loss) in
-  let { backend; Test.client; Test.server } = Test.default_network ~sw ~clock() in
-  Test.V.record_pcap ~dir backend
-    (Printf.sprintf "tcp_iperf_two_stacks_uniform_packet_loss_no_payload_%d.pcap" amt)
-    (Test.tcp_iperf ~sw ~clock ~server ~client amt timeout)
-
-let test_tcp_iperf_two_stacks_drop_1sec_after_1mb amt timeout ~dir ~sw ~clock () =
-  let module Test = Test_iperf (Vnetif_backends.Drop_1_second_after_1_megabyte) in
-  let { backend; Test.client; Test.server } = Test.default_network ~sw ~clock () in
-  Test.V.record_pcap ~dir backend
-    "tcp_iperf_two_stacks_drop_1sec_after_1mb.pcap"
-    (Test.tcp_iperf ~sw ~clock ~server ~client amt timeout)
-
-let amt_quick = 100_000
-let amt_slow  = amt_quick * 1000
-
-let run program () =
-  Eio_linux.run @@ fun env ->
+let test_tcp_iperf_two_stacks_trailing_bytes amt timeout ~sw ~env () =
   let clock = Eio.Stdenv.clock env in
   let dir = Eio.Stdenv.fs env in
-  try
-    Eio.Switch.run @@ fun sw ->
-    program ~dir ~sw ~clock ();
-    Eio.Switch.fail sw Not_found
-  with 
-  | Not_found -> ()
-  | exn -> Alcotest.fail (Printexc.to_string exn)
+  let domain_mgr = Eio.Stdenv.domain_mgr env in
+  let module Test = Test_iperf (Vnetif_backends.Trailing_bytes) in
+  let backend = Vnetif_backends.Trailing_bytes.create ~sw ~clock () in
+  Test.V.record_pcap ~dir backend
+    (Printf.sprintf "tcp_iperf_two_stacks_trailing_bytes_%d.pcap" amt)
+    (Test.tcp_iperf_domains ~domain_mgr ~clock ~backend amt timeout)
+
+let test_tcp_iperf_two_stacks_uniform_packet_loss amt timeout ~sw ~env () =
+  let clock = Eio.Stdenv.clock env in
+  let dir = Eio.Stdenv.fs env in
+  let domain_mgr = Eio.Stdenv.domain_mgr env in
+  let module Test = Test_iperf (Vnetif_backends.Uniform_packet_loss) in
+  let backend = Vnetif_backends.Uniform_packet_loss.create ~sw ~clock () in
+  Test.V.record_pcap ~dir backend
+    (Printf.sprintf "tcp_iperf_two_stacks_uniform_packet_loss_%d.pcap" amt)
+    (Test.tcp_iperf_domains ~domain_mgr ~clock ~backend amt timeout)
+
+let test_tcp_iperf_two_stacks_uniform_packet_loss_no_payload amt timeout ~sw ~env () =
+  let clock = Eio.Stdenv.clock env in
+  let dir = Eio.Stdenv.fs env in
+  let domain_mgr = Eio.Stdenv.domain_mgr env in
+  let module Test = Test_iperf (Vnetif_backends.Uniform_no_payload_packet_loss) in
+  let backend = Vnetif_backends.Uniform_no_payload_packet_loss.create ~sw ~clock () in
+  Test.V.record_pcap ~dir backend
+    (Printf.sprintf "tcp_iperf_two_stacks_uniform_packet_loss_no_payload_%d.pcap" amt)
+    (Test.tcp_iperf_domains ~domain_mgr ~clock ~backend amt timeout)
+
+let test_tcp_iperf_two_stacks_drop_1sec_after_1mb amt timeout ~sw ~env () =
+  let clock = Eio.Stdenv.clock env in
+  let dir = Eio.Stdenv.fs env in
+  let domain_mgr = Eio.Stdenv.domain_mgr env in
+  let module Test = Test_iperf (Vnetif_backends.Drop_1_second_after_1_megabyte) in
+  let backend = Vnetif_backends.Drop_1_second_after_1_megabyte.create ~sw ~clock () in
+  Test.V.record_pcap ~dir backend
+    "tcp_iperf_two_stacks_drop_1sec_after_1mb.pcap"
+    (Test.tcp_iperf_domains ~domain_mgr ~clock ~backend amt timeout)
+ 
+let amt_quick = 100_000
+let amt_slow  = amt_quick * 1000
 
 let suite = [
 
@@ -267,7 +321,7 @@ let suite = [
 
   "iperf with two stacks and uniform packet loss of packets with no payload, longer", `Slow,
  run (test_tcp_iperf_two_stacks_uniform_packet_loss_no_payload amt_slow 240.0);
-
+ 
   "iperf with two stacks, basic tests, longer", `Slow,
  run (test_tcp_iperf_two_stacks_basic amt_slow 240.0);
 

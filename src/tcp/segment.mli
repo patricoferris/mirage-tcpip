@@ -58,8 +58,8 @@ type tx_flags = No_flags | Syn | Fin | Rst | Psh
 (** Pre-transmission queue *)
 module Tx (Clock:Mirage_clock.MCLOCK) : sig
 
-  type ('a, 'b) xmit = flags:tx_flags -> wnd:Window.t -> options:Options.t list ->
-    seq:Sequence.t -> Cstruct.t -> ('a, 'b) result
+  type xmit = flags:tx_flags -> wnd:Window.t -> options:Options.t list ->
+    seq:Sequence.t -> Cstruct.t -> unit
 
   type t
   (** Queue of pre-transmission segments *)
@@ -67,7 +67,7 @@ module Tx (Clock:Mirage_clock.MCLOCK) : sig
   val create:
     sw:Eio.Switch.t -> 
     clock:Eio.Time.clock -> 
-    xmit:('a, 'b) xmit -> wnd:Window.t -> state:State.t ->
+    xmit:xmit -> wnd:Window.t -> state:State.t ->
     rx_ack:Sequence.t Eio.Stream.t ->
     tx_ack:(Sequence.t * int) Eio.Stream.t ->
     tx_wnd_update:int Eio.Stream.t -> t

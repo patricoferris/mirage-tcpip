@@ -6,7 +6,8 @@ module Keepalive = struct
   }
 end
 
-type Error.t += Refused | Timeout
+exception Refused
+exception Timeout
 
 module type S = sig
   type ipaddr
@@ -15,7 +16,7 @@ module type S = sig
 
   type dst = <dst: ipaddr * int>
 
-  val create_connection: ?keepalive:Keepalive.t -> t -> ipaddr * int -> <Eio.Flow.two_way; Eio.Flow.close; dst> Error.r
+  val create_connection: ?keepalive:Keepalive.t -> t -> ipaddr * int -> <Eio.Flow.two_way; Eio.Flow.close; dst>
   val listen : t -> port:int -> ?keepalive:Keepalive.t -> (<Eio.Flow.two_way; Eio.Flow.close; dst> -> unit) -> unit
   val unlisten : t -> port:int -> unit
 

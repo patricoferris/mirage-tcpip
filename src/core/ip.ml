@@ -1,11 +1,7 @@
-type Error.t +=
-  | No_route of string (** can't send a message to that destination *)
-  | Would_fragment
+(** can't send a message to that destination *)
+exception No_route of string 
+exception Would_fragment
 
-let () = Error.register_printer ~id:"ip" ~title:"IP" ~pp:(function
-  | No_route s -> Some Fmt.(const (fmt "no route to destination: %s") s)
-  | Would_fragment -> Some Fmt.(const string "would fragment")
-  | _ -> None)
 
 type proto = [ `TCP | `UDP | `ICMP ]
 let pp_proto ppf = function
@@ -25,7 +21,7 @@ module type S = sig
     Cstruct.t -> unit
   val write: t -> ?fragment:bool -> ?ttl:int ->
     ?src:ipaddr -> ipaddr -> proto -> ?size:int -> (Cstruct.t -> int) ->
-    Cstruct.t list -> unit Error.r
+    Cstruct.t list -> unit
   val pseudoheader : t -> ?src:ipaddr -> ipaddr -> proto -> int -> Cstruct.t
   val src: t -> dst:ipaddr -> ipaddr
   val get_ip: t -> ipaddr list

@@ -14,7 +14,6 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *)
 
-open Common
 
 (* TODO Some of these modules and signatures could eventually be moved
    to mirage-vnetif *)
@@ -76,7 +75,7 @@ module VNETIF_STACK (B : Vnetif_backends.Backend) :
   module Icmp4 = Icmpv4.Make (Ip4)
   module U4 = Udp.Make (Ip4) (Mirage_random_test)
   module T4 = Tcp.Flow.Make (Ip4) (Clock) (Mirage_random_test)
-  module Ip6 = Ipv6.Make (V) (E) (Mirage_random_test) (Clock)
+  module Ip6 = Ipv6.Make (V) (E) (Mirage_random_test)
   module U6 = Udp.Make (Ip6) (Mirage_random_test)
   module T6 = Tcp.Flow.Make (Ip6) (Clock) (Mirage_random_test)
 
@@ -93,7 +92,7 @@ module VNETIF_STACK (B : Vnetif_backends.Backend) :
     let size_limit = match mtu with None -> None | Some x -> Some x in
     let netif = V.connect ?size_limit backend in
     let ethif = E.connect netif in
-    let arpv4 = A.connect ~sw ethif clock in
+    let arpv4 = A.connect ~sw ~clock ethif  in
     let ipv4 = Ip4.connect ~cidr ?gateway ethif arpv4 in
     let icmpv4 = Icmp4.connect ipv4 in
     let udpv4 = U4.connect ipv4 in
@@ -110,11 +109,9 @@ module VNETIF_STACK (B : Vnetif_backends.Backend) :
     Stackv6.connect ~sw netif ethif ipv6 udpv6 tcpv6
 
   let create_backend_listener backend listenf =
-    match B.register backend with
-    | Error _ -> failf "Error occurred while registering to backend"
-    | Ok id ->
-        B.set_listen_fn backend id listenf;
-        id
+    let id = B.register backend in
+    B.set_listen_fn backend id listenf;
+    id
 
   let disable_backend_listener backend id = B.unregister_and_flush backend id
 
@@ -128,7 +125,7 @@ module VNETIF_STACK (B : Vnetif_backends.Backend) :
     Pcap.LE.set_pcap_header_version_major header_buf Pcap.major_version;
     Pcap.LE.set_pcap_header_version_minor header_buf Pcap.minor_version;
     Eio.Flow.(copy (cstruct_source [ header_buf ])) channel;
-    let mutex = Eio.Mutex.create () in
+    let mutex = Eio.Mutex.create ~label:"vnetif.pcap_recorder_mutex" () in
     let pcap_record channel buffer =
       Eio.Mutex.with_lock mutex @@ fun () ->
       let pcap_buf = Cstruct.create Pcap.sizeof_pcap_packet in

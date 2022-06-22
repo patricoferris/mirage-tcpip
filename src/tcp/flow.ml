@@ -35,7 +35,7 @@ struct
   module STATE = State
   module KEEPALIVE = Keepalive.Make (Clock)
 
-  type Error.t += Not_ready
+  exception Not_ready
   type ipaddr = Ip.ipaddr
 
   type pcb = {
@@ -51,14 +51,61 @@ struct
   }
 
   type flow = pcb
-  type connection = flow * Eio.Switch.t
+  type connection = flow
 
   type dst = <dst: ipaddr * int>
 
+  type pcb_params = {
+    tx_wnd : int;
+    sequence : Sequence.t;
+    options : Options.t list;
+    tx_isn : Sequence.t;
+    rx_wnd : int;
+    rx_wnd_scaleoffer : int;
+  }
+
+  type 'a or_exn = ('a, exn) result
+
+  type async_op =
+  | New_client_connect of {
+     pcb_params: pcb_params;
+     id: WIRE.t;
+     ack_number: Sequence.t;
+     keepalive: Tcpip.Tcp.Keepalive.t option;
+     wakener: connection or_exn Eio.Promise.u
+  }
+  | New_server_connect of {
+    pcb_params: pcb_params;
+    id: WIRE.t;
+    keepalive: Tcpip.Tcp.Keepalive.t option;
+    process: < Eio.Flow.two_way ; Eio.Flow.close; dst > -> unit
+  }
+  | New_connection of {
+    pushf: < Eio.Flow.two_way ; Eio.Flow.close; dst > -> unit;
+    newconn: connection;
+  }
+  | Connect_timer of {
+    id: WIRE.t;
+    tx_isn: Sequence.t;
+    options: Options.t list;
+    window: int;
+  }
+  | State_tick of {
+    state: STATE.t;
+    action: STATE.action;
+  }
+  | Keepalive_refresh of {
+    keepalive: KEEPALIVE.t
+  }
+  | RXS_input of {
+    rxq: RXS.t;
+    segment: RXS.segment;
+  }
+
   type t = {
     ip : Ip.t;
-    sw : Eio.Switch.t;
     clock : Eio.Time.clock;
+    operations : async_op Eio.Stream.t;
     listeners :
       ( int,
         Tcpip.Tcp.Keepalive.t option
@@ -77,7 +124,7 @@ struct
     (* clients in the process of connecting *)
     connects :
       ( WIRE.t,
-        connection Error.r Eio.Promise.u
+        connection or_exn Eio.Promise.u
         * Sequence.t
         * Tcpip.Tcp.Keepalive.t option )
       Hashtbl.t;
@@ -128,18 +175,21 @@ struct
 
     (* Output a SYN packet *)
     let send_syn { ip; _ } id ~tx_isn ~options ~window =
-      Logs.err (fun f -> f "Send SYN");
       WIRE.xmit ~ip id ~syn:true ~rx_ack:None ~seq:tx_isn ~window ~options
         (Cstruct.create 0)
 
     (* Queue up an immediate close segment *)
-    let close ~sw pcb =
+    let close t pcb =
       Log.info (fun f -> f "Closing connection %a" WIRE.pp pcb.id);
       match State.state pcb.state with
       | State.Established | State.Close_wait ->
           UTX.wait_for_flushed pcb.utx;
           let { wnd; _ } = pcb in
-          STATE.tick ~sw pcb.state (State.Send_fin (Window.tx_nxt wnd));
+          Eio.Stream.add t.operations 
+            (State_tick {
+              action = State.Send_fin (Window.tx_nxt wnd);
+              state = pcb.state
+            });
           TXS.output ~flags:Segment.Fin pcb.txq (Cstruct.create 0)
       | _ ->
           Log.info (fun fmt ->
@@ -174,20 +224,24 @@ struct
         ACK.transmit ack ack_number;
         notify ()
       in
-      Eio.Fiber.both send_empty_ack notify
+      Eio.Fiber.both ~label:"notify" send_empty_ack notify
   end
 
   module Rx = struct
     (* Process an incoming TCP packet that has an active PCB *)
-    let input _t parsed (pcb, sw) =
+    let input t parsed pcb =
       let { rxq; _ } = pcb in
       (* The connection is alive! *)
       (match pcb.keepalive with
       | None -> ()
-      | Some keepalive -> KEEPALIVE.refresh ~sw keepalive);
-      Eio.Fiber.fork ~sw @@ fun () ->
+      | Some keepalive -> 
+        Eio.Stream.add t.operations (Keepalive_refresh {keepalive})
+      );
       (* Coalesce any outstanding segments and retrieve ready segments *)
-      RXS.input ~sw rxq parsed
+      Eio.Stream.add t.operations (RXS_input {
+        rxq;
+        segment= parsed
+      })
 
     (* Thread that spools the data into an application receive buffer,
        and notifies the ACK subsystem that new data is here *)
@@ -277,14 +331,6 @@ struct
         ( (rx_wnd_scaleoffer, tx_f),
           [ Options.Window_size_shift rx_wnd_scaleoffer ] )
 
-  type pcb_params = {
-    tx_wnd : int;
-    sequence : Sequence.t;
-    options : Options.t list;
-    tx_isn : Sequence.t;
-    rx_wnd : int;
-    rx_wnd_scaleoffer : int;
-  }
 
   let keepalive_cb ~sw t id wnd state urx = function
     | `SendProbe ->
@@ -342,18 +388,18 @@ struct
         ~tx_isn
     in
     (* When we transmit an ACK for a received segment, rx_ack is written to *)
-    let rx_ack = Eio.Stream.create 1 in
+    let rx_ack = Eio.Stream.create ~label:"rx_ack" 1 in
     (* When we receive an ACK for a transmitted segment, tx_ack is written to *)
-    let tx_ack = Eio.Stream.create 1 in
+    let tx_ack = Eio.Stream.create ~label:"tx_ack" 1 in
     (* When new data is received, rx_data is written to *)
-    let rx_data = Eio.Stream.create 1 in
+    let rx_data = Eio.Stream.create ~label:"rx_data" 1 in
     (* Write to this mvar to transmit an empty ACK to the remote side *)
-    let send_ack = Eio.Stream.create 1 in
+    let send_ack = Eio.Stream.create ~label:"send_ack" 1 in
     (* The user application receive buffer and close notification *)
     let rx_buf_size = Window.rx_wnd wnd in
     let urx = User_buffer.Rx.create ~max_size:rx_buf_size ~wnd in
     (* The window handling thread *)
-    let tx_wnd_update = Eio.Stream.create 1 in
+    let tx_wnd_update = Eio.Stream.create ~label:"tx_wnd_update" 1 in
     (* Set up transmit and receive queues *)
     let on_close () = clearpcb t id tx_isn in
     let state = State.t ~clock:t.clock ~on_close in
@@ -386,10 +432,19 @@ struct
     let pcb = { state; rxq; txq; wnd; id; ack; urx; utx; keepalive } in
     (* Compose the overall thread from the various tx/rx threads
        and the main listener function *)
-    let tx_thread () = Tx.thread t pcb ~send_ack ~rx_ack in
-    let rx_thread () = Rx.thread ~sw pcb ~rx_data in
-    let wnd_thread () = Wnd.thread ~utx ~urx ~wnd ~state ~tx_wnd_update in
-    let threads = [ tx_thread; rx_thread; wnd_thread ] in
+    let tx_thread () = 
+      Eio.Private.Ctf.label "tx thread";
+      Tx.thread t pcb ~send_ack ~rx_ack 
+    in
+    let rx_thread () = 
+      Eio.Private.Ctf.label "rx thread";
+      Rx.thread ~sw pcb ~rx_data 
+    in
+    let wnd_thread () = 
+      Eio.Private.Ctf.label "window thread";
+      Wnd.thread ~utx ~urx ~wnd ~state ~tx_wnd_update 
+    in
+    let threads = [tx_thread; rx_thread; wnd_thread ] in
     List.iter (Eio.Fiber.fork ~sw) threads;
     (pcb, opts)
 
@@ -407,7 +462,7 @@ struct
             WIRE.pp id);
       Hashtbl.remove t.listens id;
       Stats.decr_listen ());
-    Hashtbl.add t.listens id (params.tx_isn, (pushf, (pcb, sw)));
+    Hashtbl.add t.listens id (params.tx_isn, (pushf, pcb));
     Stats.incr_listen ();
     (* Queue a SYN ACK for transmission *)
     let options =
@@ -424,7 +479,7 @@ struct
     (* A hack here because we create the pcb only after the SYN-ACK is rx-ed*)
     STATE.tick ~sw pcb.state (State.Send_syn tx_isn);
     (* Add the PCB to our connection table *)
-    Hashtbl.add t.channels id (pcb, sw);
+    Hashtbl.add t.channels id pcb;
     Stats.incr_channel ();
     STATE.tick ~sw pcb.state (State.Recv_synack ack_number);
     (* xmit ACK *)
@@ -443,16 +498,20 @@ struct
           if is_correct_ack ~tx_isn ~ack_number then (
             Hashtbl.remove t.connects id;
             Stats.decr_connect ();
-            Eio.Promise.resolve wakener (Error.v Tcpip.Tcp.Refused);
+            Eio.Promise.resolve wakener (Error Tcpip.Tcp.Refused);
             ())
           else ()
       | None -> (
           match hashtbl_find t.listens id with
-          | Some (_, (_, (pcb, sw))) ->
+          | Some (_, (_, pcb)) ->
               Hashtbl.remove t.listens id;
               Stats.decr_listen ();
-              STATE.tick ~sw pcb.state State.Recv_rst;
-              Eio.Switch.fail sw (Failure "cancelled")
+              Eio.Stream.add t.operations (State_tick {
+                state = pcb.state;
+                action = State.Recv_rst
+              })(*
+              TODO 
+              Eio.Switch.fail sw (Failure "cancelled") *)
           | None ->
               (* Incoming RST possibly to listen port - ignore per RFC793 pg65 *)
               ())
@@ -470,13 +529,13 @@ struct
           (* TODO: fix hardcoded value - it assumes that this value was
              sent in the SYN *)
           let rx_wnd_scaleoffer = wscale_default in
-          Eio.Fiber.fork_sub ~sw:t.sw ~on_error:ignore @@ fun sw ->
-           (let pcb =
-              new_client_connection ~sw t
-                { tx_wnd; sequence; options; tx_isn; rx_wnd; rx_wnd_scaleoffer }
-                id ack_number keepalive
-            in
-            Eio.Promise.resolve wakener (Ok (pcb, sw))))
+          Eio.Stream.add t.operations (New_client_connect {
+            pcb_params={ tx_wnd; sequence; options; tx_isn; rx_wnd; rx_wnd_scaleoffer };
+            id;
+            ack_number;
+            keepalive;
+            wakener
+          }))
         else
           (* Normally sending a RST reply to a random pkt would be in
              order but here we stay quiet since we are actively trying
@@ -486,7 +545,6 @@ struct
         (* Incoming SYN-ACK with no pending connect and no matching pcb
            - send RST *)
         Tx.send_rst t id ~sequence ~ack_number ~syn ~fin
-        |> fun (_ : _ result) -> ()
   (* discard errors; we won't retry *)
 
   let process_syn t id ~tx_wnd ~ack_number ~sequence ~options ~syn ~fin =
@@ -497,15 +555,15 @@ struct
         (* TODO: make this configurable per listener *)
         let rx_wnd = 65535 in
         let rx_wnd_scaleoffer = wscale_default in
-        Eio.Fiber.fork ~sw:t.sw @@ fun () ->
-        Eio.Switch.run @@ fun sw ->
-        new_server_connection ~sw t
-          { tx_wnd; sequence; options; tx_isn; rx_wnd; rx_wnd_scaleoffer }
-          id process keepalive
-        |> fun (_ : flow) -> ()
+
+        Eio.Stream.add t.operations (New_server_connect {
+          pcb_params={ tx_wnd; sequence; options; tx_isn; rx_wnd; rx_wnd_scaleoffer };
+          id;
+          keepalive;
+          process
+        });
     | None ->
         Tx.send_rst t id ~sequence ~ack_number ~syn ~fin
-        |> fun (_ : _ result) -> ()
   (* discard errors; we won't retry *)
 
   (* Blocking read on a PCB *)
@@ -535,49 +593,70 @@ struct
             writefn pcb wfn data
         | av_len when av_len >= len ->
             (* we have enough room for the whole packet *)
-            let n = wfn [ data ] in
-            Ok n
+            wfn [ data ]
         | av_len -> (
             (* partial send is possible *)
             let sendable = Cstruct.sub data 0 av_len in
-            match writefn pcb wfn sendable with
-            | Ok () -> writefn pcb wfn @@ Cstruct.sub data av_len (len - av_len)
-            | Error _ as e -> e))
-    | _ -> Error.v Not_ready
+            writefn pcb wfn sendable;
+            writefn pcb wfn @@ Cstruct.sub data av_len (len - av_len)))
+    | _ -> raise Not_ready
 
   (* Blocking write on a PCB *)
   let write pcb data = writefn pcb (UTX.write pcb.utx) data
+
+  let writev pcb data = List.iter (write pcb) data
 
   (* Close - no more will be written *)
   let close pcb = Tx.close pcb
   let chunk_cs = Cstruct.create 10000
 
-  class flow_obj ((flow, sw) : connection) =
-    object (_ : < Eio.Flow.source ; Eio.Flow.sink ; dst; .. >)
+  let fallback_copy src flow = 
+    try
+      while true do
+        let got = Eio.Flow.read src chunk_cs in
+        write flow (Cstruct.sub chunk_cs 0 got)
+      done
+    with End_of_file -> ()
+  
+  let copy_with_rsb rsb flow =
+    try
+      rsb @@ fun cstruct ->
+      writev flow cstruct
+    with
+    | End_of_file -> ()
+
+  class flow_obj t (flow : connection) =
+    object (self: < Eio.Flow.source; Eio.Flow.sink; dst; .. > )
       method probe _ = None
 
       method copy (src : #Eio.Flow.source) =
-        try
-          while true do
-            let got = Eio.Flow.read src chunk_cs in
-            match write flow (Cstruct.sub chunk_cs 0 got) with
-            | Ok () -> ()
-            | Error _e -> ()
-          done
-        with End_of_file -> ()
+        let rec aux = function
+          | Eio.Flow.Read_source_buffer rsb :: _ -> copy_with_rsb rsb flow
+          | _ :: xs -> aux xs
+          | [] -> fallback_copy src flow
+        in
+        aux (Eio.Flow.read_methods src)
 
+      method private read_source_buffer fn =
+        match read flow with
+        | Ok (`Data buffer) -> fn [buffer]
+        | Ok `Eof -> raise End_of_file
+        | Error _ -> raise End_of_file
+      
       method read_into buf =
         match read flow with
         | Ok (`Data buffer) ->
             Cstruct.blit buffer 0 buf 0 (Cstruct.length buffer);
-            let len = Cstruct.length buffer in
-            len
+            Cstruct.length buffer
         | Ok `Eof -> raise End_of_file
         | Error _ -> raise End_of_file
 
-      method read_methods = []
-      method shutdown (_ : [ `All | `Receive | `Send ]) = close ~sw flow
-      method close = close ~sw flow
+      method read_methods = [
+        Eio.Flow.Read_source_buffer self#read_source_buffer
+      ]
+
+      method shutdown (_ : [ `All | `Receive | `Send ]) = close t flow
+      method close = close t flow
       method dst = WIRE.dst flow.id, WIRE.dst_port flow.id
     end
 
@@ -598,7 +677,8 @@ struct
           (* Finish processing ACK, so pcb.state is correct *)
           Rx.input t pkt newconn;
           (* send new connection up to listener *)
-          Eio.Fiber.fork ~sw:t.sw (fun () -> pushf (new flow_obj newconn)))
+
+          Eio.Stream.add t.operations (New_connection {pushf; newconn}))
         else (* No RST because we are trying to connect on this id *)
           ()
     | None -> (
@@ -698,20 +778,18 @@ struct
           if count > 3 then (
             Hashtbl.remove t.connects id;
             Stats.decr_connect ();
-            Eio.Promise.resolve wakener (Error.v Tcpip.Tcp.Timeout))
+            Eio.Promise.resolve wakener (Error Tcpip.Tcp.Timeout))
           else
             match Tx.send_syn t id ~tx_isn ~options ~window with
-            | Ok () -> connecttimer t id tx_isn options window (count + 1)
-            | Error e -> (
-                match Error.head e with
-                | Tcpip.Ip.No_route _s ->
-                    (* normal mechanism for recovery is fine *)
-                    connecttimer t id tx_isn options window (count + 1)
-                | Tcpip.Ip.Would_fragment ->
-                    (* this should not happen, if we've a transport that fragments syn.. *)
-                    Log.err (fun m ->
-                        m "syn retransmission timer returned would fragment")
-                | _ -> Eio.Promise.resolve wakener (Error e))
+            | () -> connecttimer t id tx_isn options window (count + 1)
+            | exception Tcpip.Ip.No_route _s ->
+                (* normal mechanism for recovery is fine *)
+                connecttimer t id tx_isn options window (count + 1)
+            | exception Tcpip.Ip.Would_fragment ->
+                (* this should not happen, if we've a transport that fragments syn.. *)
+                Log.err (fun m ->
+                    m "syn retransmission timer returned would fragment")
+            | exception e -> Eio.Promise.resolve wakener (Error e)
         else ()
 
   let connect ?keepalive t ~dst ~dst_port =
@@ -737,14 +815,13 @@ struct
       Stats.decr_connect ());
     Hashtbl.add t.connects id (wakener, tx_isn, keepalive);
     Stats.incr_connect ();
-    match Tx.send_syn t id ~tx_isn ~options ~window with
-    | Ok () | Error _ (* keep trying *) ->
-        Eio.Fiber.fork ~sw:t.sw (fun () ->
-            connecttimer t id tx_isn options window 0);
-        th
+    Tx.send_syn t id ~tx_isn ~options ~window;
+     (* keep trying *)
+    Eio.Stream.add t.operations (Connect_timer {id; tx_isn; options; window});
+    th
 
-  let log_failure daddr dport err =
-    match Error.head err with
+  let log_failure daddr dport exn =
+    match exn with
     | Tcpip.Tcp.Timeout ->
         Log.info (fun fmt ->
             fmt "Timeout attempting to connect to %a:%d\n%!" Ip.pp_ipaddr daddr
@@ -754,20 +831,72 @@ struct
             fmt "Refused connection to %a:%d\n%!" Ip.pp_ipaddr daddr dport)
     | e ->
         Log.info (fun fmt ->
-            fmt "%a error connecting to %a:%d\n%!" Error.pp e Ip.pp_ipaddr daddr
+            fmt "%s error connecting to %a:%d\n%!" (Printexc.to_string e) Ip.pp_ipaddr daddr
               dport)
 
   let create_connection ?keepalive tcp (daddr, dport) =
-    if not tcp.active then Error.v Not_ready (* TODO: custom error variant *)
+    if not tcp.active then raise Not_ready (* TODO: custom error variant *)
     else
       match
         Eio.Promise.await (connect ?keepalive tcp ~dst:daddr ~dst_port:dport)
       with
       | Error e ->
           log_failure daddr dport e;
-          Error e
-      | Ok conn -> Ok (new flow_obj conn)
+          raise e
+      | Ok conn -> new flow_obj tcp conn
 
+  let rec handle t ~sw operations =
+    let v = Eio.Stream.take operations in
+    Eio.Fiber.fork ~sw (fun () -> 
+      Eio.Private.Ctf.label "tcp.handle";
+      match v with
+      | New_client_connect {
+          pcb_params;
+          id;
+          ack_number;
+          keepalive;
+          wakener
+        } ->
+        let pcb =
+          new_client_connection ~sw t
+            pcb_params
+            id ack_number keepalive
+        in
+        Eio.Promise.resolve wakener (Ok pcb)
+      | New_server_connect {
+          pcb_params;
+          id;
+          process;
+          keepalive
+        } ->
+        new_server_connection ~sw t pcb_params id process keepalive
+        |> fun (_ : flow) -> ()
+      | New_connection {
+          pushf;
+          newconn
+        } -> pushf (new flow_obj t newconn)
+      | Connect_timer {
+          id;
+          tx_isn;
+          options;
+          window  
+        } -> connecttimer t id tx_isn options window 0
+      | State_tick {
+          state;
+          action;
+        } -> 
+          STATE.tick ~sw state action
+      | Keepalive_refresh {
+        keepalive
+        } -> 
+          KEEPALIVE.refresh ~sw keepalive
+      | RXS_input {
+          rxq; segment
+        } -> 
+          RXS.input ~sw rxq segment
+    );
+    handle t ~sw operations
+  
   (* Construct the main TCP thread *)
   let connect ~sw ~clock ip =
     let localport =
@@ -776,9 +905,10 @@ struct
     let listens = Hashtbl.create 1 in
     let connects = Hashtbl.create 1 in
     let channels = Hashtbl.create 7 in
-    {
+    let operations = Eio.Stream.create max_int in
+    let t = {
       ip;
-      sw;
+      operations;
       clock;
       listeners = Hashtbl.create 7;
       active = true;
@@ -787,13 +917,19 @@ struct
       listens;
       connects;
     }
+    in
+    Eio.Fiber.fork ~sw (fun () -> 
+      Eio.Private.Ctf.label "tcp.handle.init";
+      handle t ~sw operations);
+    t
+    
 
   let disconnect t =
     t.active <- false;
     let conns =
-      Hashtbl.fold (fun _ (pcb, sw) acc -> (pcb, sw) :: acc) t.channels []
+      Hashtbl.fold (fun _ pcb acc -> pcb :: acc) t.channels []
     in
-    Fiber.all (List.map (fun (pcb, sw) () -> close ~sw pcb) conns);
+    Fiber.all (List.map (fun pcb () -> close t pcb) conns);
     Hashtbl.reset t.listens;
     Hashtbl.reset t.connects
   (* TODO: should there be Lwt tasks being cancelled? *)

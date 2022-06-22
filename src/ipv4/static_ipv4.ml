@@ -35,18 +35,16 @@ module Make (R: Mirage_random.S) (C: Mirage_clock.MCLOCK) (Ethernet: Ethernet.S)
 
   let write t ?(fragment = true) ?(ttl = 38) ?src dst proto ?(size = 0) headerf bufs =
     match Routes.destination_mac t.cidr t.gateway t.arp dst with
-    | Error e when Error.head e = Routing.Local ->
+    | exception Routing.Local ->
       Log.warn (fun f -> f "Could not find %a on the local network" Ipaddr.V4.pp dst);
-      Error.add_error ~__POS__ (Tcpip.Ip.No_route "no response for IP on local network") (Error e)
-    | Error e when t.gateway = None && Error.head e = Routing.Gateway ->
-      Log.warn (fun f -> f "Write to %a would require an external route, which was not provided" Ipaddr.V4.pp dst);
-      Ok ()
-    | Error e when Error.head e = Routing.Local ->
+      raise (Tcpip.Ip.No_route "no response for IP on local network")
+    | exception Routing.Gateway when t.gateway = None ->
+      Log.warn (fun f -> f "Write to %a would require an external route, which was not provided" Ipaddr.V4.pp dst)
+    | exception Routing.Gateway ->
       Log.warn (fun f -> f "Write to %a requires an external route, and the provided %a was not reachable" Ipaddr.V4.pp dst (Fmt.option Ipaddr.V4.pp) t.gateway);
       (* when a gateway is specified the user likely expects their traffic to be passed to it *)
-      Error.add_error ~__POS__ (Tcpip.Ip.No_route "no route to default gateway to outside world") (Error e)
-    | Error e -> Error e
-    | Ok mac ->
+      raise (Tcpip.Ip.No_route "no route to default gateway to outside world")
+    | mac ->
       (* need first to deal with fragmentation decision - find out mtu *)
       let mtu = Ethernet.mtu t.ethif in
       (* no options here, always 20 bytes! *)
@@ -55,7 +53,7 @@ module Make (R: Mirage_random.S) (C: Mirage_clock.MCLOCK) (Ethernet: Ethernet.S)
       let multiple = needed_bytes > mtu in
       (* construct the header (will be reused across fragments) *)
       if not fragment && multiple then
-        (Error.v ~__POS__ Tcpip.Ip.Would_fragment)
+        (raise Tcpip.Ip.Would_fragment)
       else
         let off =
           match fragment, multiple with
@@ -108,21 +106,12 @@ module Make (R: Mirage_random.S) (C: Mirage_clock.MCLOCK) (Ethernet: Ethernet.S)
           let header = Ipv4_packet.Marshal.make_cstruct ~payload_len hdr  in
           header::headerf_buf::payload_first_frame
         in
-        match Ethernet.writev t.ethif mac `IPv4 iovec with
-        | Error e -> 
-          Log.warn (fun f -> f "Error sending Ethernet frame: %a"
-                       Error.pp (Error.head e));
-          Error e
-        | Ok () ->
-          if not multiple then
-            Ok ()
-          else
-            let remaining = Fragments.fragment ~mtu hdr !leftover in
-            List.fold_left (fun acc p ->
-                match acc with
-                | Error e -> Error e
-                | Ok () -> Ethernet.writev t.ethif mac `IPv4 p)
-              (Ok ()) remaining
+        Ethernet.writev t.ethif mac `IPv4 iovec;
+        if not multiple then
+          ()
+        else
+          let remaining = Fragments.fragment ~mtu hdr !leftover in
+          List.iter (Ethernet.writev t.ethif mac `IPv4) remaining
 
   let input t ~tcp ~udp ~default buf =
     match Ipv4_packet.Unmarshal.of_cstruct buf with

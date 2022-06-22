@@ -20,7 +20,7 @@ let get_stack ~sw ~clock ?(backend = B.create ~use_async_readers:sw ()) ip =
   let cidr = Ipaddr.V4.Prefix.make 24 ip in
   let netif = V.connect backend in
   let ethif = E.connect netif in
-  let arp = Static_arp.connect ~sw ethif clock in
+  let arp = Static_arp.connect ~sw ~clock ethif in
   let ip = Ip.connect ~cidr ethif arp in
   let udp = Udp.connect ip in
   { backend; netif; ethif; arp; ip; udp }
@@ -46,11 +46,11 @@ let marshal_unmarshal () =
   | Ok (_header, data) ->
     Alcotest.(check cstruct) "unmarshalling gives expected data" payload data
 
-let write ~sw ~clock () =
+let write ~sw ~env () =
   let dst = Ipaddr.V4.of_string_exn "192.168.4.20" in
-  let stack = get_stack ~sw ~clock dst in
+  let stack = get_stack ~sw ~clock:env#clock dst in
   Static_arp.add_entry stack.arp dst (Macaddr.of_string_exn "00:16:3e:ab:cd:ef");
-  Udp.write ~src_port:1212 ~dst_port:21 ~dst stack.udp (Cstruct.of_string "MGET *") |> Result.get_ok
+  Udp.write ~src_port:1212 ~dst_port:21 ~dst stack.udp (Cstruct.of_string "MGET *")
 
 let unmarshal_regression () =
   let i = Cstruct.create 1016 in

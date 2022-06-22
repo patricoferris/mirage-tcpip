@@ -32,7 +32,7 @@ module type S = sig
       their destination port. *)
 
   val write: ?src:ipaddr -> ?src_port:int -> ?ttl:int -> dst:ipaddr ->
-    dst_port:int -> t -> Cstruct.t -> unit Error.r
+    dst_port:int -> t -> Cstruct.t -> unit
   (** [write ~src ~src_port ~ttl ~dst ~dst_port udp data] is a task
       that writes [data] from an optional [src] and [src_port] to a [dst]
       and [dst_port] IP address pair. An optional time-to-live ([ttl]) is passed

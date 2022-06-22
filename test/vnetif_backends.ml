@@ -37,7 +37,7 @@ module Frame_size_enforced = struct
 
   let writev t id iovec =
     let len = Cstruct.lenv iovec in
-    if len > t.frame_size then Error.v (Mirage_net.Net.Invalid_length len)
+    if len > t.frame_size then raise (Mirage_net.Net.Invalid_length len)
     else X.writev t.xt id iovec
 
   let set_frame_size t m = t.frame_size <- m
@@ -83,7 +83,7 @@ module Uniform_packet_loss : Backend = struct
   let writev t id iovec =
     if Random.float 1.0 < drop_p then (
       MProf.Trace.label "pkt_drop";
-      Ok () (* drop packet *))
+      () (* drop packet *))
     else X.writev t id iovec (* pass to real write *)
 
   let create ~sw ~clock:_ () = X.create ~use_async_readers:sw ()
@@ -105,8 +105,7 @@ module Uniform_no_payload_packet_loss : Backend = struct
     let size = Cstruct.lenv iovec in
     if size <= no_payload_len && Random.float 1.0 < drop_p then (
       MProf.Trace.label "pkt_drop";
-      X.writev t id [Cstruct.create 1] |> ignore; (* Send invalid frame to see dropped packets. *)
-      Ok () (* drop packet *))
+      () (* drop packet *))
     else X.writev t id iovec (* pass to real write *)
 
   let create ~sw ~clock:_ () = X.create ~use_async_readers:sw ()
@@ -122,7 +121,7 @@ module Drop_1_second_after_1_megabyte : Backend = struct
     mutable sent_bytes : int;
     mutable is_dropping : bool;
     mutable done_dropping : bool;
-    perform_drop : Eio.Condition.t;
+    perform_drop : unit Eio.Condition.t;
   }
 
   type macaddr = X.macaddr
@@ -142,7 +141,7 @@ module Drop_1_second_after_1_megabyte : Backend = struct
       t.sent_bytes > byte_limit && t.is_dropping = false
       && t.done_dropping = false
     then (
-      Eio.Condition.broadcast t.perform_drop;
+      Eio.Condition.broadcast t.perform_drop ();
       true)
     else if t.is_dropping = true then true
     else false
@@ -150,12 +149,12 @@ module Drop_1_second_after_1_megabyte : Backend = struct
   let writev t id iovec =
     let size = Cstruct.lenv iovec in
     t.sent_bytes <- t.sent_bytes + size;
-    if should_drop t then Ok ()
+    if should_drop t then ()
     else X.writev t.xt id iovec (* pass to real write *)
 
   let create ~sw ~clock () =
     let xt = X.create ~use_async_readers:sw () in
-    let perform_drop = Eio.Condition.create () in
+    let perform_drop = Eio.Condition.create ~label:"vnetif_tests.perform_drop_mutex" () in
     let t =
       {
         xt;
@@ -188,7 +187,7 @@ module On_off_switch = struct
     if not !send_packets then (
       Logs.info (fun f -> f "write dropping 1 packet");
       MProf.Trace.label "pkt_drop";
-      Ok () (* drop packet *))
+      () (* drop packet *))
     else X.writev t id iovec (* pass to real write *)
 
   let create ~sw ~clock:_ () = X.create ~use_async_readers:sw ()

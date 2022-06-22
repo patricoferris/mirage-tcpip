@@ -65,13 +65,14 @@ module Make (Ip : Tcpip.Ip.S) = struct
              frame and drop the payload.. oops *)
       | Ok _l -> tcp_size
     in
-    match Ip.write ip ~fragment:false ~src dst `TCP ~size:tcp_size fill_buffer [payload] with
-    | Ok () -> Ok ()
-    (* swallow errors so normal recovery mechanisms can be used *)
-    (* For errors which aren't transient, or are too long-lived for TCP to recover
-     * from, this will eventually result in a higher-level notification
-     * that communication over the TCP flow has failed *)
-    | Error e ->
-      Log.warn (fun l -> l "Error sending TCP packet via IP: %a" Error.pp (Error.head e));
-      Ok ()
+    try 
+      Ip.write ip ~fragment:false ~src dst `TCP ~size:tcp_size fill_buffer [payload] 
+    with
+    | exn ->
+      (* swallow errors so normal recovery mechanisms can be used *)
+      (* For errors which aren't transient, or are too long-lived for TCP to recover
+       * from, this will eventually result in a higher-level notification
+       * that communication over the TCP flow has failed *)
+      Log.warn (fun l -> l "Error sending TCP packet via IP: %s" (Printexc.to_string exn));
+
 end

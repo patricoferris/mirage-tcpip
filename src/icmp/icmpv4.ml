@@ -3,7 +3,7 @@ module type S = sig
   val disconnect : t -> unit
   type ipaddr = Ipaddr.V4.t
   val input : t -> src:ipaddr -> dst:ipaddr -> Cstruct.t -> unit
-  val write : t -> ?src:ipaddr -> dst:ipaddr -> ?ttl:int -> Cstruct.t -> unit Error.r
+  val write : t -> ?src:ipaddr -> dst:ipaddr -> ?ttl:int -> Cstruct.t -> unit
 end
 
 let src = Logs.Src.create "icmpv4" ~doc:"Mirage ICMPv4"
@@ -23,11 +23,7 @@ module Make (IP : Tcpip.Ip.S with type ipaddr = Ipaddr.V4.t) = struct
   let disconnect _ = ()
 
   let writev t ?src ~dst ?ttl bufs =
-    match IP.write t.ip ?src dst ?ttl `ICMP (fun _ -> 0) bufs with
-    | Ok () -> Ok ()
-    | Error e ->
-      Log.warn (fun f -> f "Error sending IP packet: %a" Error.pp_trace e);
-      Error e
+    IP.write t.ip ?src dst ?ttl `ICMP (fun _ -> 0) bufs
 
   let write t ?src ~dst ?ttl buf = writev t ?src ~dst ?ttl [buf]
 
@@ -57,10 +53,7 @@ module Make (IP : Tcpip.Ip.S with type ipaddr = Ipaddr.V4.t) = struct
             ty   = Icmpv4_wire.Echo_reply;
             subheader = Id_and_seq (id, seq);
           } in
-          match writev t ~dst:src [ Marshal.make_cstruct icmp ~payload; payload ] with
-          | Ok () -> ()
-          | Error e ->
-            Log.warn (fun f -> f "Unable to send ICMP echo-reply: %a" Error.pp_trace e); ()
+          writev t ~dst:src [ Marshal.make_cstruct icmp ~payload; payload ]
         end
       | ty, _ ->
         Log.info (fun f ->

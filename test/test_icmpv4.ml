@@ -46,7 +46,7 @@ let get_stack ~sw ~clock ?(backend = B.create ~use_async_readers:sw ()) ip =
   let cidr = Ipaddr.V4.Prefix.make 24 ip in
   let netif = V.connect backend in
   let ethif = E.connect netif in
-  let arp = Static_arp.connect ~sw ethif clock in
+  let arp = Static_arp.connect ~sw ~clock ethif in
   let ip = Ip.connect ~cidr ethif arp in
   let icmp = Icmp.connect ip in
   let udp = Udp.connect ip in
@@ -66,7 +66,7 @@ let icmp_listen stack fn =
 let inform_arp stack = Static_arp.add_entry stack.arp
 let mac_of_stack stack = E.mac stack.ethif
 
-let short_read ~sw:_ ~clock:_ () =
+let short_read ~sw:_ ~env:_ () =
   let too_short = Cstruct.create 4 in
   match Icmpv4_packet.Unmarshal.of_cstruct too_short with
   | Ok (icmp, _) ->
@@ -74,7 +74,8 @@ let short_read ~sw:_ ~clock:_ () =
 		     Cstruct.hexdump_pp too_short Icmpv4_packet.pp icmp)
   | Error str -> Printf.printf "short packet rejected successfully! msg: %s\n" str
 
-let echo_request ~sw ~clock () =
+let echo_request ~sw ~env () =
+  let clock = env#clock in
   let seq_no = 0x01 in
   let id_no = 0x1234 in
   let request_payload = Cstruct.of_string "plz reply i'm so lonely" in
@@ -109,11 +110,10 @@ let echo_request ~sw ~clock () =
         Icmp.input listener.icmp ~src ~dst buf));
     (fun () -> icmp_listen speaker (fun ~src:_ ~dst:_ -> check))
   ]);
-  match Icmp.write speaker.icmp ~dst:listener_address echo_request with
-  | Error e -> Alcotest.failf "ICMP echo request write: %a" Error.pp_trace e
-  | Ok () -> ()
+  Icmp.write speaker.icmp ~dst:listener_address echo_request
 
-let echo_silent ~sw ~clock () =
+let echo_silent ~sw  ~env () =
+  let clock = env#clock in
   let open Icmpv4_packet in
   let speaker = get_stack ~sw ~clock speaker_address in
   let listener = get_stack ~sw ~clock ~backend:speaker.backend listener_address in
@@ -139,11 +139,10 @@ let echo_silent ~sw ~clock () =
     (fun () -> icmp_listen listener (fun ~src ~dst buf -> Icmp.input listener.icmp ~src ~dst buf));
     (fun () -> icmp_listen speaker (fun ~src:_ ~dst:_ -> check));
   ]);
-  match Icmp.write speaker.icmp ~dst:nobody_home echo_request with
-  | Error e -> Alcotest.failf "ICMP echo request write: %a" Error.pp_trace e
-  | Ok () -> ()
+  Icmp.write speaker.icmp ~dst:nobody_home echo_request
 
-let write_errors ~sw ~clock () =
+let write_errors ~sw ~env () =
+  let clock = env#clock in
   let decompose buf =
     let open Ethernet.Packet in
     let* ethernet_header, ethernet_payload = of_cstruct buf in
@@ -170,7 +169,7 @@ let write_errors ~sw ~clock () =
             ~payload:decomposed.ethernet_payload in
         let header_and_payload = Cstruct.concat ([header ; decomposed.ethernet_payload]) in
         let open Ipv4_packet in
-        Icmp.write stack.icmp ~dst:decomposed.ipv4_header.src header_and_payload |> Result.get_ok
+        Icmp.write stack.icmp ~dst:decomposed.ipv4_header.src header_and_payload
     in
     V.listen stack.netif ~header_size reject |> ignore
   in
@@ -199,7 +198,7 @@ let write_errors ~sw ~clock () =
         V.disconnect stack.netif));
       (fun () -> 
         Eio.Time.sleep clock 0.5;
-        Udp.write stack.udp ~dst ~src_port:1212 ~dst_port:123 payload |> Result.get_ok;
+        Udp.write stack.udp ~dst ~src_port:1212 ~dst_port:123 payload;
         Eio.Time.sleep clock 1.;
         Alcotest.fail "writing thread completed first");
     ]

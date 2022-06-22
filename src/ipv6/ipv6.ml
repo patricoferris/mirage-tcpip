@@ -23,8 +23,7 @@ module Lwt = struct end
 module Make
     (N : Mirage_net.S)
     (E : Ethernet.S)
-    (R : Mirage_random.S)
-    (C : Mirage_clock.MCLOCK) =
+    (R : Mirage_random.S) =
 struct
   type ipaddr = Ipaddr.V6.t
   type callback = src:ipaddr -> dst:ipaddr -> Cstruct.t -> unit
@@ -43,7 +42,7 @@ struct
 
   let start_ticking t u =
     let rec loop u =
-      let now = C.elapsed_ns () in
+      let now = Eio.Time.now t.clock |> Duration.of_f in
       let ctx, outs = Ndpv6.tick ~now t.ctx in
       t.ctx <- ctx;
       let u =
@@ -63,7 +62,7 @@ struct
   let mtu t ~dst:_ = E.mtu t.ethif - Ipv6_wire.sizeof_ipv6
 
   let write t ?fragment:_ ?ttl:_ ?src dst proto ?(size = 0) headerf bufs =
-    let now = C.elapsed_ns () in
+    let now = Eio.Time.now t.clock |> Duration.of_f in
     (* TODO fragmentation! *)
     let payload = Cstruct.concat bufs in
     let size' = size + Cstruct.length payload in
@@ -77,23 +76,12 @@ struct
     in
     let ctx, outs = Ndpv6.send ~now t.ctx ?src dst proto size' fillf in
     t.ctx <- ctx;
-    let fail_any progress data =
-      let squeal = function
-        | Ok () as ok -> ok
-        | Error e ->
-            Log.warn (fun f -> f "ethif write errored: %a" Error.pp_trace e);
-            Error e
-      in
-      match progress with
-      | Ok () -> output t data |> squeal
-      | Error e -> Error e
-    in
     (* MCP - it's not totally clear to me that this the right behavior
        for writev. *)
-    List.fold_left fail_any (Ok ()) outs
+    List.iter (output t) outs
 
   let input t ~tcp ~udp ~default buf =
-    let now = C.elapsed_ns () in
+    let now = Eio.Time.now t.clock |> Duration.of_f in
     let ctx, outs, actions = Ndpv6.handle ~now ~random:R.generate t.ctx buf in
     t.ctx <- ctx;
     List.iter
@@ -127,7 +115,7 @@ struct
   let connect ?(no_init = false) ?(handle_ra = true) ?cidr ?gateway ~clock ~sw
       netif ethif =
     Log.info (fun f -> f "IP6: Starting");
-    let now = C.elapsed_ns () in
+    let now = Eio.Time.now clock |> Duration.of_f in
     let ctx, outs =
       Ndpv6.local ~handle_ra ~now ~random:R.generate (E.mac ethif)
     in
@@ -147,8 +135,10 @@ struct
     let t = { ctx; ethif; clock } in
     if no_init then t
     else
-      let task, u = Eio.Promise.create () in
-      Eio.Fiber.fork ~sw (fun () -> start_ticking t u);
+      let task, u = Eio.Promise.create ~label:"ipv6.init" () in
+      Eio.Fiber.fork ~sw (fun () ->
+        Eio.Private.Ctf.label "ipv6.connect.tick"; 
+        start_ticking t u);
       (* call listen until we're good in respect to DAD *)
       let ethif_listener =
         let noop ~src:_ ~dst:_ _ = () in

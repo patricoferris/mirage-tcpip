@@ -49,7 +49,7 @@ let create_sut_stack backend =
 let create_raw_stack ~sw ~clock backend =
   let netif = V.connect backend in
   let ethif = E.connect netif in
-  let arpv4 = A.connect ~sw ethif clock in
+  let arpv4 = A.connect ~sw ~clock ethif  in
   let ip = I.connect ~cidr:server_cidr ~gateway ethif arpv4 in
   (netif, ethif, arpv4, ip)
 
@@ -167,7 +167,7 @@ let sut_connects_and_remains_connected ~clock stack fail_callback =
     VNETIF_STACK.Stackv4.TCPV4.create_connection
       (VNETIF_STACK.Stackv4.tcpv4 stack)
   in
-  let flow = or_error "connect" conn (server_ip, 80) in
+  let flow = conn (server_ip, 80) in
   (* We must remain blocked on read, connection shouldn't be terminated.
    * If after half second that remains true, assume test succeeds *)
   try
@@ -186,12 +186,10 @@ let blind_rst_on_syn_scenario =
           let id = reply_id_from ~src ~dst data in
           (* This -blind- reset must be ignored because of invalid ack. *)
           WIRE.xmit ~ip id ~rst:true ~rx_ack:(ack_from_past data 1)
-            ~seq:(Sequence.of_int32 0l) ~window ~options (Cstruct.create 0)
-          |> Result.get_ok;
+            ~seq:(Sequence.of_int32 0l) ~window ~options (Cstruct.create 0);
           (* The syn-ack must be received and connection established *)
           WIRE.xmit ~ip id ~syn:true ~rx_ack:(ack data)
-            ~seq:(Sequence.of_int32 0l) ~window ~options (Cstruct.create 0)
-          |> Result.get_ok;
+            ~seq:(Sequence.of_int32 0l) ~window ~options (Cstruct.create 0);
           Fsm_next `WAIT_FOR_ACK)
         else Fsm_error "Expected initial syn request"
     | `WAIT_FOR_ACK ->
@@ -210,8 +208,7 @@ let connection_refused_scenario =
           let id = reply_id_from ~src ~dst data in
           (* refused *)
           WIRE.xmit ~ip id ~rst:true ~rx_ack:(ack data)
-            ~seq:(Sequence.of_int32 0l) ~window ~options (Cstruct.create 0)
-          |> Result.get_ok;
+            ~seq:(Sequence.of_int32 0l) ~window ~options (Cstruct.create 0);
           Fsm_done)
         else Fsm_error "Expected initial syn request"
   in
@@ -221,7 +218,7 @@ let connection_refused_scenario =
         (VNETIF_STACK.Stackv4.tcpv4 stack)
     in
     (* connection must be rejected *)
-    expect_error Tcpip.Tcp.Refused "connect" conn (server_ip, 80) |> ignore
+    expect_exception Tcpip.Tcp.Refused "connect" conn (server_ip, 80) |> ignore
   in
   ((`WAIT_FOR_SYN, fsm), sut)
 
@@ -233,8 +230,7 @@ let blind_rst_on_established_scenario =
         if syn then (
           let id = reply_id_from ~src ~dst data in
           WIRE.xmit ~ip id ~syn:true ~rx_ack:(ack data)
-            ~seq:(Sequence.of_int32 0l) ~window ~options (Cstruct.create 0)
-          |> Result.get_ok;
+            ~seq:(Sequence.of_int32 0l) ~window ~options (Cstruct.create 0);
           Fsm_next `WAIT_FOR_ACK)
         else Fsm_error "Expected initial syn request"
     | `WAIT_FOR_ACK ->
@@ -243,8 +239,7 @@ let blind_rst_on_established_scenario =
            * Must trigger a challenge ack and not tear down the connection *)
           let id = reply_id_from ~src ~dst data in
           WIRE.xmit ~ip id ~rst:true ~rx_ack:None ~seq:(Sequence.of_int32 10l)
-            ~window ~options (Cstruct.create 0)
-          |> Result.get_ok;
+            ~window ~options (Cstruct.create 0);
           Fsm_next `WAIT_FOR_CHALLENGE)
         else Fsm_error "Expected final ack of three way handshake"
     | `WAIT_FOR_CHALLENGE ->
@@ -262,8 +257,7 @@ let rst_on_established_scenario =
         if syn then (
           let id = reply_id_from ~src ~dst data in
           WIRE.xmit ~ip id ~syn:true ~rx_ack:(ack data)
-            ~seq:(Sequence.of_int32 0l) ~window ~options (Cstruct.create 0)
-          |> Result.get_ok;
+            ~seq:(Sequence.of_int32 0l) ~window ~options (Cstruct.create 0);
           Fsm_next `WAIT_FOR_ACK)
         else Fsm_error "Expected initial syn request"
     | `WAIT_FOR_ACK ->
@@ -271,8 +265,7 @@ let rst_on_established_scenario =
           let id = reply_id_from ~src ~dst data in
           (* This reset is acceptable and exactly in sequence. Must trigger a reset on the other end *)
           WIRE.xmit ~ip id ~rst:true ~rx_ack:None ~seq:(Sequence.of_int32 1l)
-            ~window ~options (Cstruct.create 0)
-          |> Result.get_ok;
+            ~window ~options (Cstruct.create 0);
           Fsm_done)
         else Fsm_error "Expected final ack of three step dance"
   in
@@ -282,7 +275,7 @@ let rst_on_established_scenario =
       VNETIF_STACK.Stackv4.TCPV4.create_connection
         (VNETIF_STACK.Stackv4.tcpv4 stack)
     in
-    let flow = or_error "connect" conn (server_ip, 80) in
+    let flow = conn (server_ip, 80) in
     let buf = Cstruct.create_unsafe 1024 in
     match Eio.Flow.read flow buf with
     | exception End_of_file ->
@@ -300,8 +293,7 @@ let blind_syn_on_established_scenario =
         if syn then (
           let id = reply_id_from ~src ~dst data in
           WIRE.xmit ~ip id ~syn:true ~rx_ack:(ack data)
-            ~seq:(Sequence.of_int32 0l) ~window ~options (Cstruct.create 0)
-          |> Result.get_ok;
+            ~seq:(Sequence.of_int32 0l) ~window ~options (Cstruct.create 0);
           Fsm_next `WAIT_FOR_ACK)
         else Fsm_error "Expected initial syn request"
     | `WAIT_FOR_ACK ->
@@ -311,8 +303,7 @@ let blind_syn_on_established_scenario =
           (* This -blind- syn should trigger a challenge ack and not
              tear down the connection *)
           WIRE.xmit ~ip id ~syn:true ~rx_ack:None ~seq:(Sequence.of_int32 10l)
-            ~window ~options (Cstruct.create 0)
-          |> Result.get_ok;
+            ~window ~options (Cstruct.create 0);
           Fsm_next `WAIT_FOR_CHALLENGE)
         else Fsm_error "Expected final ack of three step dance"
     | `WAIT_FOR_CHALLENGE ->
@@ -332,8 +323,7 @@ let blind_data_injection_scenario =
           let id = reply_id_from ~src ~dst data in
           WIRE.xmit ~ip id ~syn:true ~rx_ack:(ack data)
             ~seq:(Sequence.of_int32 1000000l)
-            ~window ~options (Cstruct.create 0)
-          |> Result.get_ok;
+            ~window ~options (Cstruct.create 0);
           Fsm_next `WAIT_FOR_ACK)
         else Fsm_error "Expected initial syn request"
     | `WAIT_FOR_ACK ->
@@ -344,8 +334,7 @@ let blind_data_injection_scenario =
           let invalid_ack = ack_from_past data (window + 100) in
           WIRE.xmit ~ip id ~rx_ack:invalid_ack
             ~seq:(Sequence.of_int32 1000001l)
-            ~window ~options page
-          |> Result.get_ok;
+            ~window ~options page;
           Fsm_next `WAIT_FOR_CHALLENGE)
         else Fsm_error "Expected final ack of three step dance"
     | `WAIT_FOR_CHALLENGE ->
@@ -366,8 +355,7 @@ let data_repeated_ack_scenario =
           let id = reply_id_from ~src ~dst data in
           WIRE.xmit ~ip id ~syn:true ~rx_ack:(ack data)
             ~seq:(Sequence.of_int32 1000000l)
-            ~window ~options (Cstruct.create 0)
-          |> Result.get_ok;
+            ~window ~options (Cstruct.create 0);
           Fsm_next `WAIT_FOR_ACK)
         else Fsm_error "Expected initial syn request"
     | `WAIT_FOR_ACK ->
@@ -377,8 +365,7 @@ let data_repeated_ack_scenario =
           let valid_ack = ack_from_past data (window - 100) in
           WIRE.xmit ~ip id ~rx_ack:valid_ack
             ~seq:(Sequence.of_int32 1000001l)
-            ~window ~options page
-          |> Result.get_ok;
+            ~window ~options page;
           Fsm_next `WAIT_FOR_DATA_ACK)
         else Fsm_error "Expected final ack of three step dance"
     | `WAIT_FOR_DATA_ACK ->
@@ -395,7 +382,7 @@ let data_repeated_ack_scenario =
       VNETIF_STACK.Stackv4.TCPV4.create_connection
         (VNETIF_STACK.Stackv4.tcpv4 stack)
     in
-    let flow = or_error "connect" conn (server_ip, 80) in
+    let flow = conn (server_ip, 80) in
     (* We should receive the data *)
     let buffer = Cstruct.create 1024 in
     match Eio.Flow.read flow buffer with
@@ -408,13 +395,11 @@ let run_test pcap_file ((initial_state, fsm), sut) () =
   Eio_linux.run @@ fun env ->
   let clock = Eio.Stdenv.clock env in
   let dir = Eio.Stdenv.fs env in
-  try
-    Eio.Switch.run @@ fun sw ->
-    let backend = VNETIF_STACK.create_backend ~sw ~clock () in
-    VNETIF_STACK.record_pcap ~dir backend pcap_file
-      (run ~sw ~clock backend (initial_state, fsm) (sut ~clock));
-    Eio.Switch.fail sw Not_found
-  with Not_found -> ()
+  Common.switch_run_cancel_on_return @@ fun sw ->
+  let backend = VNETIF_STACK.create_backend ~sw ~clock () in
+  VNETIF_STACK.record_pcap ~dir backend pcap_file
+    (run ~sw ~clock backend (initial_state, fsm) (sut ~clock));
+  Eio.Switch.fail sw Not_found
 
 let suite =
   [

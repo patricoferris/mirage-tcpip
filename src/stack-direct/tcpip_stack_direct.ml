@@ -65,32 +65,23 @@ struct
         ~ipv6:(fun _ -> ())
         t.ethif
     in
-    let res =
-      Netif.listen t.netif ~header_size:Ethernet.Packet.sizeof_ethernet
-        ethif_listener
-    in
-    match res with
-    | Error _e ->
-        (*Log.warn (fun p -> p "%a" Netif.pp_error e) ; TODO*)
-        (* XXX: error should be passed to the caller *)
-        ()
-    | Ok _res ->
-        let nstat = Netif.get_stats_counters t.netif in
-        let open Mirage_net in
-        Log.info (fun f ->
-            f
-              "listening loop of interface %s terminated regularly:@ %Lu bytes \
-               (%lu packets) received, %Lu bytes (%lu packets) sent@ "
-              (Macaddr.to_string (Netif.mac t.netif))
-              nstat.rx_bytes nstat.rx_pkts nstat.tx_bytes nstat.tx_pkts);
-        ()
+    Netif.listen t.netif ~header_size:Ethernet.Packet.sizeof_ethernet
+      ethif_listener;
+    let nstat = Netif.get_stats_counters t.netif in
+    let open Mirage_net in
+    Log.info (fun f ->
+        f
+          "listening loop of interface %s terminated regularly:@ %Lu bytes \
+            (%lu packets) received, %Lu bytes (%lu packets) sent@ "
+          (Macaddr.to_string (Netif.mac t.netif))
+          nstat.rx_bytes nstat.rx_pkts nstat.tx_bytes nstat.tx_pkts)
 
   let connect ~sw netif ethif arpv4 ipv4 icmpv4 udpv4 tcpv4 =
-    let cancel_promise, cancel = Eio.Promise.create () in
+    let cancel_promise, cancel = Eio.Promise.create ~label:"tcpip.stack-direct.connect" () in
     let t = { netif; ethif; arpv4; ipv4; icmpv4; tcpv4; udpv4; cancel } in
     Log.info (fun f -> f "stack assembled: %a" pp t);
     Eio.Fiber.fork ~sw (fun () ->
-        Eio.Fiber.first
+        Eio.Fiber.first ~label:"tcpip.stack-direct.listen"
           (fun () -> listen t)
           (fun () -> Eio.Promise.await cancel_promise));
     t
@@ -141,32 +132,23 @@ struct
              t.ipv6)
         t.ethif
     in
-    let e =
-      Netif.listen t.netif ~header_size:Ethernet.Packet.sizeof_ethernet
-        ethif_listener
-    in
-    match e with
-    | Error _e ->
-        (*Log.warn (fun p -> p "%a" Netif.pp_error e) ;*)
-        (* XXX: error should be passed to the caller *)
-        ()
-    | Ok _res ->
-        let nstat = Netif.get_stats_counters t.netif in
-        let open Mirage_net in
-        Log.info (fun f ->
-            f
-              "listening loop of interface %s terminated regularly:@ %Lu bytes \
-               (%lu packets) received, %Lu bytes (%lu packets) sent@ "
-              (Macaddr.to_string (Netif.mac t.netif))
-              nstat.rx_bytes nstat.rx_pkts nstat.tx_bytes nstat.tx_pkts);
-        ()
+    Netif.listen t.netif ~header_size:Ethernet.Packet.sizeof_ethernet
+      ethif_listener;
+    let nstat = Netif.get_stats_counters t.netif in
+    let open Mirage_net in
+    Log.info (fun f ->
+        f
+          "listening loop of interface %s terminated regularly:@ %Lu bytes \
+            (%lu packets) received, %Lu bytes (%lu packets) sent@ "
+          (Macaddr.to_string (Netif.mac t.netif))
+          nstat.rx_bytes nstat.rx_pkts nstat.tx_bytes nstat.tx_pkts)
 
   let connect ~sw netif ethif ipv6 udpv6 tcpv6 =
-    let cancel_promise, cancel = Eio.Promise.create () in
+    let cancel_promise, cancel = Eio.Promise.create ~label:"tcpip.stack-direct.connect" () in
     let t = { netif; ethif; ipv6; tcpv6; udpv6; cancel } in
     Log.info (fun f -> f "stack assembled: %a" pp t);
     Eio.Fiber.fork ~sw (fun () ->
-        Eio.Fiber.first
+        Eio.Fiber.first ~label:"tcpip.stack-direct.listen"
           (fun () -> listen t)
           (fun () -> Eio.Promise.await cancel_promise));
     t
@@ -185,7 +167,7 @@ struct
 
   let pp_ipaddr = Ipaddr.pp
 
-  type Error.t += V4V6 of string
+  exception V4V6 of string
   type t = { ipv4 : Ipv4.t; ipv4_only : bool; ipv6 : Ipv6.t; ipv6_only : bool }
 
   let connect ~ipv4_only ~ipv6_only ipv4 ipv6 =
@@ -223,34 +205,28 @@ struct
     match dst with
     | Ipaddr.V4 dst ->
         if not t.ipv6_only then
-          match
+          let src =
             match src with
-            | None -> Ok None
-            | Some (Ipaddr.V4 src) -> Ok (Some src)
-            | _ -> Error.v ~__POS__ (V4V6 "source must be V4 if dst is V4")
-          with
-          | Error e -> Error e
-          | Ok src ->
-              Ipv4.write t.ipv4 ?fragment ?ttl ?src dst proto ?size headerf bufs
+            | None -> None
+            | Some (Ipaddr.V4 src) -> (Some src)
+            | _ -> raise (V4V6 "source must be V4 if dst is V4")
+          in
+          Ipv4.write t.ipv4 ?fragment ?ttl ?src dst proto ?size headerf bufs
         else (
           Log.warn (fun m ->
-              m "attempted to write an IPv4 packet in a v6 only stack");
-          Ok ())
+              m "attempted to write an IPv4 packet in a v6 only stack"))
     | Ipaddr.V6 dst ->
         if not t.ipv4_only then
-          match
+          let src = 
             match src with
-            | None -> Ok None
-            | Some (Ipaddr.V6 src) -> Ok (Some src)
-            | _ -> Error.v ~__POS__ (V4V6 "source must be V6 if dst is V6")
-          with
-          | Error e -> Error e
-          | Ok src ->
-              Ipv6.write t.ipv6 ?fragment ?ttl ?src dst proto ?size headerf bufs
+            | None -> None
+            | Some (Ipaddr.V6 src) -> (Some src)
+            | _ -> raise (V4V6 "source must be V6 if dst is V6")
+          in
+          Ipv6.write t.ipv6 ?fragment ?ttl ?src dst proto ?size headerf bufs
         else (
           Log.warn (fun m ->
-              m "attempted to write an IPv6 packet in a v4 only stack");
-          Ok ())
+              m "attempted to write an IPv6 packet in a v4 only stack"))
 
   let pseudoheader t ?src dst proto len =
     match dst with
@@ -321,45 +297,38 @@ struct
 
   let listen t =
     Log.debug (fun f -> f "Establishing or updating listener for stack %a" pp t);
-    let tcp = Tcp.input t.tcp
+    let tcp ~src ~dst buf = 
+      Tcp.input t.tcp ~src ~dst buf
     and udp = Udp.input t.udp
     and default ~proto ~src ~dst buf =
+      Log.app (fun f -> f "PROTO %d" proto);
       match (proto, src, dst) with
       | 1, Ipaddr.V4 src, Ipaddr.V4 dst -> Icmpv4.input t.icmpv4 ~src ~dst buf
       | _ -> ()
     in
-    let ethif_listener =
+    let ethif_listener buf =
       Eth.input ~arpv4:(Arpv4.input t.arpv4)
         ~ipv4:(IP.input ~tcp ~udp ~default t.ip)
         ~ipv6:(IP.input ~tcp ~udp ~default t.ip)
-        t.ethif
+        t.ethif buf
     in
-    let e =
-      Netif.listen t.netif ~header_size:Ethernet.Packet.sizeof_ethernet
-        ethif_listener
-    in
-    match e with
-    | Error _e ->
-        (*Log.warn (fun p -> p "%a" Netif.pp_error e) ;*)
-        (* XXX: error should be passed to the caller *)
-        ()
-    | Ok _res ->
-        let nstat = Netif.get_stats_counters t.netif in
-        let open Mirage_net in
-        Log.info (fun f ->
-            f
-              "listening loop of interface %s terminated regularly:@ %Lu bytes \
-               (%lu packets) received, %Lu bytes (%lu packets) sent@ "
-              (Macaddr.to_string (Netif.mac t.netif))
-              nstat.rx_bytes nstat.rx_pkts nstat.tx_bytes nstat.tx_pkts);
-        ()
+    Netif.listen t.netif ~header_size:Ethernet.Packet.sizeof_ethernet
+      ethif_listener;
+    let nstat = Netif.get_stats_counters t.netif in
+    let open Mirage_net in
+    Log.info (fun f ->
+        f
+          "listening loop of interface %s terminated regularly:@ %Lu bytes \
+            (%lu packets) received, %Lu bytes (%lu packets) sent@ "
+          (Macaddr.to_string (Netif.mac t.netif))
+          nstat.rx_bytes nstat.rx_pkts nstat.tx_bytes nstat.tx_pkts)
 
   let connect ~sw netif ethif arpv4 ip icmpv4 udp tcp =
-    let cancel_promise, cancel = Eio.Promise.create () in
+    let cancel_promise, cancel = Eio.Promise.create ~label:"tcpip.stack-direct.connect" () in
     let t = { netif; ethif; arpv4; ip; icmpv4; tcp; udp; cancel } in
     Log.info (fun f -> f "stack assembled: %a" pp t);
     Eio.Fiber.fork ~sw (fun () ->
-        Eio.Fiber.first
+        Eio.Fiber.first ~label:"tcpip.stack-direct.listen"
           (fun () -> listen t)
           (fun () -> Eio.Promise.await cancel_promise));
     t

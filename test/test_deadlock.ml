@@ -36,7 +36,7 @@ struct
 
   let make ~sw ~clock ~cidr ?gateway netif =
     let ethif = ETHIF.connect netif in
-    let arpv4 = ARPV4.connect ~sw ethif clock in
+    let arpv4 = ARPV4.connect ~sw ~clock ethif in
     let ipv4 = IPV4.connect ~cidr ?gateway ethif arpv4 in
     let icmpv4 = ICMPV4.connect ipv4 in
     let udpv4 = UDPV4.connect ipv4 in
@@ -70,10 +70,9 @@ let test_digest ~sw ~clock netif1 netif2 =
   let send_data () =
     let data = Mirage_random_test.generate 100_000_000 |> Cstruct.to_string in
     let t0   = Unix.gettimeofday () in
-    match TCPIP.TCPV4.create_connection
-      TCPIP.(tcpv4 @@ tcpip server_stack) (TCPIP.client_ip, port) with
-    | Error _ -> failwith "could not establish tunneled connection"
-    | Ok flow ->
+    let flow =  TCPIP.TCPV4.create_connection
+      TCPIP.(tcpv4 @@ tcpip server_stack) (TCPIP.client_ip, port) 
+    in
       Server_log.debug (fun f -> f "established conn");
       let rec read_digest chunks =
         let chunk = Cstruct.create 10000 in
@@ -134,7 +133,8 @@ let test_digest ~sw ~clock netif1 netif2 =
       (fun () -> TCPIP.listen @@ TCPIP.tcpip client_stack);
     ]
 
-let run_vnetif ~sw ~clock () =
+let run_vnetif ~sw ~env () =
+  let clock = env#clock in
   let backend = Basic_backend.Make.create
       ~use_async_readers:sw () in
   let c1 = TCPIP.M.NETIF.connect ~size_limit:mtu backend in

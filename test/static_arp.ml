@@ -19,16 +19,16 @@ module Make(E : Ethernet.S) = struct
     in
     Hashtbl.iter print t.table
 
-  let connect ~sw e clock = 
-    let base = A.connect ~sw e clock in
+  let connect ~sw ~clock e = 
+    let base = A.connect ~clock ~sw e in
     { base; table = (Hashtbl.create 7) }
 
   let disconnect t = A.disconnect t.base
 
   let query t ip =
     match Hashtbl.mem t.table ip with
-    | false -> Error.v Arp.Timeout
-    | true -> (Ok (Hashtbl.find t.table ip))
+    | false -> raise Arp.Timeout
+    | true -> (Hashtbl.find t.table ip)
 
   let input t buffer =
     (* disregard responses, but reply to queries *)

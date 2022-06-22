@@ -243,9 +243,9 @@ module Tx (Clock:Mirage_clock.MCLOCK) = struct
   module TT = Tcptimer
   module TX = Window.Make(Clock)
 
-  type ('a, 'b) xmit =
+  type xmit =
     flags:tx_flags -> wnd:Window.t -> options:Options.t list ->
-    seq:Sequence.t -> Cstruct.t -> ('a, 'b) result
+    seq:Sequence.t -> Cstruct.t -> unit
 
   type seg = {
     data: Cstruct.t;
@@ -262,9 +262,9 @@ module Tx (Clock:Mirage_clock.MCLOCK) = struct
     (Cstruct.length seg.data))
 
   (* Queue of pre-transmission segments *)
-  type ('a, 'b) q = {
+  type q = {
     segs: seg Lwt_dllist.t;      (* Retransmitted segment queue *)
-    xmit: ('a, 'b) xmit;           (* Transmit packet to the wire *)
+    xmit: xmit;           (* Transmit packet to the wire *)
     rx_ack: Sequence.t Eio.Stream.t; (* RX Ack thread that we've sent one *)
     wnd: Window.t;                 (* TCP Window information *)
     state: State.t;                (* state of the TCP connection associated
@@ -274,7 +274,7 @@ module Tx (Clock:Mirage_clock.MCLOCK) = struct
     mutable dup_acks: int;         (* dup ack count for re-xmits *)
   }
 
-  type t = T: ('a, 'b) q -> t
+  type t = T: q -> t
 
   let ack_segment _ _ = ()
   (* Take any action to the user transmit queue due to this being
@@ -314,8 +314,7 @@ module Tx (Clock:Mirage_clock.MCLOCK) = struct
               Eio.Fiber.fork ~sw
                 (fun () ->
                    xmit ~flags ~wnd ~options ~seq rexmit_seg.data
-                   (* TODO should this return value really be ignored? *)
-                   |> fun (_: ('a,'b) result) -> () );
+                   );
               Window.alert_fast_rexmit wnd rexmit_seg.seq;
               Window.backoff_rto wnd;
               Log.debug (fun fmt -> fmt "Backed off! %a" Window.pp wnd);
@@ -375,8 +374,7 @@ module Tx (Clock:Mirage_clock.MCLOCK) = struct
             let options=[] in (* TODO: put the right options *)
             Eio.Fiber.fork ~sw (fun () ->
                 q.xmit ~flags ~wnd ~options ~seq rexmit_seg.data
-                (* TODO should this return value really be ignored? *)
-                |> fun (_: ('a,'b) result) -> () );
+               );
             ()
           end else
             ()

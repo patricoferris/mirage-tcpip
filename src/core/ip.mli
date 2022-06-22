@@ -1,9 +1,11 @@
 (** {2 IP layer} *)
-
 (** IP errors and protocols. *)
-type Error.t +=
-  | No_route of string (** can't send a message to that destination *)
-  | Would_fragment (** would need to fragment, but fragmentation is disabled *)
+
+(** can't send a message to that destination *)
+exception No_route of string 
+
+(** would need to fragment, but fragmentation is disabled *)
+exception Would_fragment 
 
 
 type proto = [ `TCP | `UDP | `ICMP ]
@@ -47,7 +49,7 @@ module type S = sig
 
   val write: t -> ?fragment:bool -> ?ttl:int ->
     ?src:ipaddr -> ipaddr -> proto -> ?size:int -> (Cstruct.t -> int) ->
-    Cstruct.t list -> unit Error.r
+    Cstruct.t list -> unit
   (** [write t ~fragment ~ttl ~src dst proto ~size headerf payload] allocates a
      buffer, writes the IP header, and calls the headerf function. This may
      write to the provided buffer of [size] (default 0). If [size + ip header]

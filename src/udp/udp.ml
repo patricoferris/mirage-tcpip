@@ -68,13 +68,12 @@ module Make (Ip : Tcpip.Ip.S) (Random : Mirage_random.S) = struct
         Logs.err (fun m -> m "error while assembling udp header: %s, ignoring" msg);
         8
     in
-    match Ip.write t.ip ?src dst ?ttl `UDP ~size:8 fill_hdr bufs with
-    | Ok () -> Ok ()
-    | Error e ->
-      Log.err (fun f -> f "IP module couldn't send UDP packet to %a: %a"
-                  pp_ip dst Error.pp (Error.head e));
+    try 
+      Ip.write t.ip ?src dst ?ttl `UDP ~size:8 fill_hdr bufs 
+    with
+    |  _ -> 
       (* we're supposed to make our best effort, and we did *)
-      Ok ()
+      Log.err (fun f -> f "IP module couldn't send UDP packet to %a" pp_ip dst )
 
   let write ?src ?src_port ?ttl ~dst ~dst_port t buf =
     writev ?src ?src_port ?ttl ~dst ~dst_port t [buf]
