@@ -17,7 +17,7 @@
 let src = Logs.Src.create "udp" ~doc:"Mirage UDP"
 module Log = (val Logs.src_log src : Logs.LOG)
 
-module Make (Ip : Tcpip.Ip.S) (Random : Mirage_random.S) = struct
+module Make (Ip : Tcpip.Ip.S) = struct
 
   type ipaddr = Ip.ipaddr
   type callback = src:ipaddr -> dst:ipaddr -> src_port:int -> Cstruct.t -> unit
@@ -51,9 +51,12 @@ module Make (Ip : Tcpip.Ip.S) (Random : Mirage_random.S) = struct
       | None    -> ()
       | Some fn -> fn ~src ~dst ~src_port payload
 
-  let writev ?src ?src_port ?ttl ~dst ~dst_port t bufs =
+  let writev ~random ?src ?src_port ?ttl ~dst ~dst_port t bufs =
     let src_port = match src_port with
-      | None   -> Randomconv.int ~bound:65535 (fun x -> Random.generate x)
+      | None   -> 
+        let buf = Cstruct.create 2 in
+        Eio.Flow.read_exact random buf;
+        Cstruct.LE.get_uint16 buf 0
       | Some p -> p
     in
     let fill_hdr buf =

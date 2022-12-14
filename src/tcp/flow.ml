@@ -23,17 +23,15 @@ let src = Logs.Src.create "pcb" ~doc:"Mirage TCP PCB module"
 module Log = (val Logs.src_log src : Logs.LOG)
 
 module Make
-    (Ip : Tcpip.Ip.S)
-    (Clock : Mirage_clock.MCLOCK)
-    (Random : Mirage_random.S) =
+    (Ip : Tcpip.Ip.S) =
 struct
   module RXS = Segment.Rx
-  module TXS = Segment.Tx (Clock)
+  module TXS = Segment.Tx
   module ACK = Ack.Immediate
-  module UTX = User_buffer.Tx (Clock)
+  module UTX = User_buffer.Tx
   module WIRE = Wire.Make (Ip)
   module STATE = State
-  module KEEPALIVE = Keepalive.Make (Clock)
+  module KEEPALIVE = Keepalive
 
   exception Not_ready
   type ipaddr = Ip.ipaddr
@@ -104,7 +102,9 @@ struct
 
   type t = {
     ip : Ip.t;
+    mono : Eio.Time.Mono.t;
     clock : Eio.Time.clock;
+    random : Eio.Flow.source;
     operations : async_op Eio.Stream.t;
     listeners :
       ( int,
@@ -224,7 +224,7 @@ struct
         ACK.transmit ack ack_number;
         notify ()
       in
-      Eio.Fiber.both ~label:"notify" send_empty_ack notify
+      Eio.Fiber.both send_empty_ack notify
   end
 
   module Rx = struct
@@ -388,23 +388,23 @@ struct
         ~tx_isn
     in
     (* When we transmit an ACK for a received segment, rx_ack is written to *)
-    let rx_ack = Eio.Stream.create ~label:"rx_ack" 1 in
+    let rx_ack = Eio.Stream.create 1 in
     (* When we receive an ACK for a transmitted segment, tx_ack is written to *)
-    let tx_ack = Eio.Stream.create ~label:"tx_ack" 1 in
+    let tx_ack = Eio.Stream.create 1 in
     (* When new data is received, rx_data is written to *)
-    let rx_data = Eio.Stream.create ~label:"rx_data" 1 in
+    let rx_data = Eio.Stream.create 1 in
     (* Write to this mvar to transmit an empty ACK to the remote side *)
-    let send_ack = Eio.Stream.create ~label:"send_ack" 1 in
+    let send_ack = Eio.Stream.create 1 in
     (* The user application receive buffer and close notification *)
     let rx_buf_size = Window.rx_wnd wnd in
     let urx = User_buffer.Rx.create ~max_size:rx_buf_size ~wnd in
     (* The window handling thread *)
-    let tx_wnd_update = Eio.Stream.create ~label:"tx_wnd_update" 1 in
+    let tx_wnd_update = Eio.Stream.create 1 in
     (* Set up transmit and receive queues *)
     let on_close () = clearpcb t id tx_isn in
     let state = State.t ~clock:t.clock ~on_close in
     let txq =
-      TXS.create ~sw ~clock:t.clock ~xmit:(Tx.xmit_pcb t.ip id) ~wnd ~state
+      TXS.create ~sw ~mono:t.mono ~clock:t.clock ~xmit:(Tx.xmit_pcb t.ip id) ~wnd ~state
         ~rx_ack ~tx_ack ~tx_wnd_update
     in
     (* The user application transmit buffer *)
@@ -425,7 +425,7 @@ struct
                    https://github.com/mirage/mirage-tcpip/issues/367");
             emitted_keepalive_warning := true);
           Some
-            (KEEPALIVE.create ~sw ~clock:t.clock config
+            (KEEPALIVE.create ~sw ~mono:t.mono ~clock:t.clock config
                (keepalive_cb ~sw t id wnd state urx))
     in
     (* Construct basic PCB in Syn_received state *)
@@ -551,7 +551,12 @@ struct
     log_with_stats "process-syn" t;
     match Hashtbl.find_opt t.listeners (WIRE.src_port id) with
     | Some (keepalive, process) ->
-        let tx_isn = Sequence.of_int32 (Randomconv.int32 Random.generate) in
+        let random =
+          let buf = Cstruct.create 4 in
+          Eio.Flow.read_exact t.random buf;
+          Cstruct.LE.get_uint32 buf 0
+        in
+        let tx_isn = Sequence.of_int32 random in
         (* TODO: make this configurable per listener *)
         let rx_wnd = 65535 in
         let rx_wnd_scaleoffer = wscale_default in
@@ -593,18 +598,20 @@ struct
             writefn pcb wfn data
         | av_len when av_len >= len ->
             (* we have enough room for the whole packet *)
-            wfn [ data ]
+            wfn [ data ];
+            len
         | av_len -> (
             (* partial send is possible *)
             let sendable = Cstruct.sub data 0 av_len in
-            writefn pcb wfn sendable;
-            writefn pcb wfn @@ Cstruct.sub data av_len (len - av_len)))
+            let i = writefn pcb wfn sendable in
+            let _j = writefn pcb wfn @@ Cstruct.sub data av_len (len - av_len) in
+            i))
     | _ -> raise Not_ready
 
   (* Blocking write on a PCB *)
   let write pcb data = writefn pcb (UTX.write pcb.utx) data
 
-  let writev pcb data = List.iter (write pcb) data
+  let writev pcb data = List.fold_left (fun acc d -> acc + write pcb d) 0 data
 
   (* Close - no more will be written *)
   let close pcb = Tx.close pcb
@@ -614,7 +621,7 @@ struct
     try
       while true do
         let got = Eio.Flow.read src chunk_cs in
-        write flow (Cstruct.sub chunk_cs 0 got)
+        ignore (write flow (Cstruct.sub chunk_cs 0 got))
       done
     with End_of_file -> ()
   
@@ -637,9 +644,9 @@ struct
         in
         aux (Eio.Flow.read_methods src)
 
-      method private read_source_buffer fn =
+      method private read_source_buffer (fn : Cstruct.t list -> int) : unit =
         match read flow with
-        | Ok (`Data buffer) -> fn [buffer]
+        | Ok (`Data buffer) -> ignore (fn [buffer])
         | Ok `Eof -> raise End_of_file
         | Error _ -> raise End_of_file
       
@@ -654,6 +661,9 @@ struct
       method read_methods = [
         Eio.Flow.Read_source_buffer self#read_source_buffer
       ]
+
+      method write bufs = 
+        let _ : int = writev flow bufs in ()
 
       method shutdown (_ : [ `All | `Receive | `Send ]) = close t flow
       method close = close t flow
@@ -794,7 +804,12 @@ struct
 
   let connect ?keepalive t ~dst ~dst_port =
     let id = getid t dst dst_port in
-    let tx_isn = Sequence.of_int32 (Randomconv.int32 Random.generate) in
+    let random =
+      let buf = Cstruct.create 4 in
+      Eio.Flow.read_exact t.random buf;
+      Cstruct.LE.get_uint32 buf 0
+    in
+    let tx_isn = Sequence.of_int32 random in
     (* TODO: This is hardcoded for now - make it configurable *)
     let rx_wnd_scaleoffer = wscale_default in
     let options =
@@ -898,9 +913,15 @@ struct
     handle t ~sw operations
   
   (* Construct the main TCP thread *)
-  let connect ~sw ~clock ip =
+  let connect ~sw ~mono ~random ~clock ip =
+    let r =
+      let buf = Cstruct.create 4 in
+      Eio.Flow.read_exact random buf;
+      Cstruct.LE.get_uint32 buf 0 |>
+      Int32.to_int
+    in
     let localport =
-      1024 + Randomconv.int ~bound:(0xFFFF - 1024) Random.generate
+      1024 + (r - 1024)
     in
     let listens = Hashtbl.create 1 in
     let connects = Hashtbl.create 1 in
@@ -909,6 +930,8 @@ struct
     let t = {
       ip;
       operations;
+      mono;
+      random;
       clock;
       listeners = Hashtbl.create 7;
       active = true;

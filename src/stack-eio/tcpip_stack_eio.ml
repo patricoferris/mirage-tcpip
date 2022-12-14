@@ -30,13 +30,13 @@ module Make(Stack: Tcpip.Stack.V4V6) = struct
             flow
 
       method datagram_socket ~sw (`Udp (_addr, port)) =
-        let condition = Eio.Condition.create ~label:"udp socket" () in
+        let condition = Eio.Condition.create () in
         let () =
           Eio.Fiber.fork ~sw @@ fun () ->
           Stack.UDP.listen (Stack.udp stack) ~port
           @@ fun ~src ~dst:_ ~src_port buffer ->
           (* the buffer should be copied ? *)
-          Eio.Condition.broadcast condition
+          Eio.Condition.broadcast condition;
             (`Udp (mirage_ip_to_eio_ip src, src_port), buffer)
         in
         (object

@@ -1,5 +1,3 @@
-open Lwt
-
 type error = [ Tcpip.Tcp.error | `Exn of exn ]
 type write_error = [ Tcpip.Tcp.write_error | `Exn of exn ]
 
@@ -10,10 +8,6 @@ let pp_error ppf = function
 let pp_write_error ppf = function
   | #Tcpip.Tcp.write_error as e -> Tcpip.Tcp.pp_write_error ppf e
   | `Exn e -> Fmt.exn ppf e
-
-let ignore_canceled = function
-  | Lwt.Canceled -> Lwt.return_unit
-  | exn -> raise exn
 
 let disconnect _ =
   return_unit

@@ -27,12 +27,12 @@ module Rx : sig
 end
 
 
-module Tx(Clock:Mirage_clock.MCLOCK) : sig
+module Tx : sig
 
   type t
 
   module TXS : sig
-    type t = Segment.Tx(Clock).t
+    type t = Segment.Tx.t
     val output : ?flags:Segment.tx_flags -> ?options:Options.t list -> t ->
       Cstruct.t -> unit
   end

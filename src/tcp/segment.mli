@@ -56,7 +56,7 @@ type tx_flags = No_flags | Syn | Fin | Rst | Psh
 (** Either Syn/Fin/Rst allowed, but not combinations *)
 
 (** Pre-transmission queue *)
-module Tx (Clock:Mirage_clock.MCLOCK) : sig
+module Tx : sig
 
   type xmit = flags:tx_flags -> wnd:Window.t -> options:Options.t list ->
     seq:Sequence.t -> Cstruct.t -> unit
@@ -66,6 +66,7 @@ module Tx (Clock:Mirage_clock.MCLOCK) : sig
 
   val create:
     sw:Eio.Switch.t -> 
+    mono:Eio.Time.Mono.t ->
     clock:Eio.Time.clock -> 
     xmit:xmit -> wnd:Window.t -> state:State.t ->
     rx_ack:Sequence.t Eio.Stream.t ->

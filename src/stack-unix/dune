@@ -78,14 +78,13 @@
 ; (libraries eio ipaddr.unix fmt tcpip tcpv4_socket
 ;   tcp_socket_options logs))
 ;
-;(library
-; (name tcpip_stack_socket)
-; (public_name tcpip.stack-socket)
-; (modules tcpip_stack_socket ipv4_socket ipv6_socket ipv4v6_socket)
-; (wrapped false)
-; (instrumentation
-;  (backend bisect_ppx))
-; (libraries eio ipaddr.unix logs tcpip.tcpv4-socket
-;   tcpip.udpv4-socket tcpip.ipv4 tcpip.tcpv6-socket tcpip.udpv6-socket
-;   tcpip.ipv6 tcpip.tcpv4v6-socket tcpip.udpv4v6-socket))
-;
+(library
+(name tcpip_stack_socket)
+(public_name tcpip.stack-socket)
+(modules tcpip_stack_socket ipv4_socket ipv6_socket ipv4v6_socket)
+(wrapped false)
+(instrumentation
+ (backend bisect_ppx))
+(libraries eio ipaddr.unix logs tcpip.tcpv4-socket
+  tcpip.udpv4-socket tcpip.ipv4 tcpip.tcpv6-socket tcpip.udpv6-socket
+  tcpip.ipv6 tcpip.tcpv4v6-socket tcpip.udpv4v6-socket))

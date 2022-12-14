@@ -44,16 +44,14 @@ val next: configuration:Tcpip.Tcp.Keepalive.t -> ns:int64 -> state -> action * s
     that we last received a packet [ns] nanoseconds ago and the new state
     of the connection *)
 
-module Make(Clock:Mirage_clock.MCLOCK): sig
-  type t
-  (** A keep-alive timer *)
+type t
+(** A keep-alive timer *)
 
-  val create: sw:Eio.Switch.t -> clock:Eio.Time.clock -> Tcpip.Tcp.Keepalive.t -> ([ `SendProbe | `Close] -> unit) -> t
-  (** [create configuration f clock] returns a keep-alive timer which will call
-      [f] in future depending on both the [configuration] and any calls to
-      [refresh] *)
+val create: sw:Eio.Switch.t -> mono:Eio.Time.Mono.t -> clock:Eio.Time.clock -> Tcpip.Tcp.Keepalive.t -> ([ `SendProbe | `Close] -> unit) -> t
+(** [create configuration f clock] returns a keep-alive timer which will call
+    [f] in future depending on both the [configuration] and any calls to
+    [refresh] *)
 
-  val refresh: sw:Eio.Switch.t -> t -> unit
-  (** [refresh t] marks the connection [t] as alive. This should be called
-      when packets are received. *)
-end
+val refresh: sw:Eio.Switch.t -> t -> unit
+(** [refresh t] marks the connection [t] as alive. This should be called
+    when packets are received. *)

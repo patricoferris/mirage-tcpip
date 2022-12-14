@@ -237,11 +237,11 @@ type tx_flags = (* At most one of Syn/Fin/Rst/Psh allowed *)
   | Rst
   | Psh
 
-module Tx (Clock:Mirage_clock.MCLOCK) = struct
+module Tx = struct
 
   module StateTick = State
   module TT = Tcptimer
-  module TX = Window.Make(Clock)
+  module TX = Window
 
   type xmit =
     flags:tx_flags -> wnd:Window.t -> options:Options.t list ->

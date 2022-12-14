@@ -20,7 +20,7 @@ module Log = (val Logs.src_log src : Logs.LOG)
 
 module Make
     (Random : Mirage_random.S)
-    (Netif : Mirage_net.S)
+    (etif : Mirage_net.S)
     (Eth : Ethernet.S)
     (Arpv4 : Arp.S)
     (Ipv4 : Tcpip.Ip.S with type ipaddr = Ipaddr.V4.t)

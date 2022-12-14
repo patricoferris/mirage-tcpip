@@ -20,6 +20,7 @@ module Log = (val Logs.src_log src : Logs.LOG)
 type time = int64
 
 type t = {
+  mono: Eio.Time.Mono.t;
   tx_mss: int;
   tx_isn: Sequence.t;
   rx_isn: Sequence.t;
@@ -70,7 +71,7 @@ let pp fmt t =
     t.backoff_count t.rto
 
 (* Initialise the sequence space *)
-let t ~rx_wnd_scale ~tx_wnd_scale ~rx_wnd ~tx_wnd ~rx_isn ~tx_mss ~tx_isn =
+let t ~mono ~rx_wnd_scale ~tx_wnd_scale ~rx_wnd ~tx_wnd ~rx_isn ~tx_mss ~tx_isn =
   let tx_nxt = tx_isn in
   let rx_nxt = Sequence.succ rx_isn in
   let rx_nxt_inseq = Sequence.succ rx_isn in
@@ -96,7 +97,7 @@ let t ~rx_wnd_scale ~tx_wnd_scale ~rx_wnd ~tx_wnd ~rx_isn ~tx_mss ~tx_isn =
   let rttvar = 0L in
   let rto = (Duration.of_ms 667) in
   let backoff_count = 0 in
-  { tx_isn; rx_isn; max_rx_wnd; max_tx_wnd;
+  { mono; tx_isn; rx_isn; max_rx_wnd; max_tx_wnd;
     ack_serviced; ack_seq; ack_win;
     snd_una; tx_nxt; tx_wnd; rx_nxt; rx_nxt_inseq;
     fast_rec_th; rx_wnd; tx_wnd_scale; rx_wnd_scale;
@@ -153,60 +154,59 @@ let set_tx_wnd t sz =
 let tx_mss t =
   t.tx_mss
 
-module Make(Clock:Mirage_clock.MCLOCK) = struct
-  (* Advance transmitted packet sequence number *)
-  let tx_advance t b =
-    if not t.rtt_timer_on && not t.fast_recovery then begin
-      t.rtt_timer_on <- true;
-      t.rtt_timer_seq <- t.tx_nxt;
-      t.rtt_timer_starttime <- Clock.elapsed_ns ();
-    end;
-    t.tx_nxt <- Sequence.add t.tx_nxt b
 
-  (* An ACK was received - use it to adjust cwnd *)
-  let tx_ack t r win =
-    set_tx_wnd t win;
-    if t.fast_recovery then begin
-      if Sequence.gt r t.snd_una then
-        t.snd_una <- r;
-      if Sequence.geq r t.fast_rec_th then begin
-        Log.debug (fun f -> f "EXITING fast recovery");
-        t.cwnd <- t.ssthresh;
-        t.fast_recovery <- false;
-      end else begin
-        t.cwnd <- (Int32.add t.cwnd (Int32.of_int t.tx_mss));
-      end
+(* Advance transmitted packet sequence number *)
+let tx_advance t b =
+  if not t.rtt_timer_on && not t.fast_recovery then begin
+    t.rtt_timer_on <- true;
+    t.rtt_timer_seq <- t.tx_nxt;
+    t.rtt_timer_starttime <- Eio.Time.Mono.now t.mono |> Mtime.to_uint64_ns;
+  end;
+  t.tx_nxt <- Sequence.add t.tx_nxt b
+
+(* An ACK was received - use it to adjust cwnd *)
+let tx_ack t r win =
+  set_tx_wnd t win;
+  if t.fast_recovery then begin
+    if Sequence.gt r t.snd_una then
+      t.snd_una <- r;
+    if Sequence.geq r t.fast_rec_th then begin
+      Log.debug (fun f -> f "EXITING fast recovery");
+      t.cwnd <- t.ssthresh;
+      t.fast_recovery <- false;
     end else begin
-      if Sequence.gt r t.snd_una then begin
-        t.backoff_count <- 0;
-        t.snd_una <- r;
-        if t.rtt_timer_on && Sequence.gt r t.rtt_timer_seq then begin
-          t.rtt_timer_on <- false;
-          let rtt_m = Int64.sub (Clock.elapsed_ns ()) t.rtt_timer_starttime in
-          if t.rtt_timer_reset then begin
-            t.rtt_timer_reset <- false;
-            t.rttvar <- Int64.div rtt_m 2L;
-            t.srtt <- rtt_m;
-          end else begin
-            let (/) = Int64.div
-            and ( * ) = Int64.mul
-            and (-) = Int64.sub
-            and (+) = Int64.add
-            in
-            (* RFC2988 2.3 *)
-            t.rttvar <- (3L * t.rttvar / 4L) + (Int64.abs (t.srtt - rtt_m) / 4L);
-            t.srtt <- (7L * t.srtt / 8L) + (rtt_m / 8L)
-          end;
-          t.rto <- max (Duration.of_ms 667) Int64.(add t.srtt (mul t.rttvar 4L));
-        end;
-      end;
-      let cwnd_incr = match t.cwnd < t.ssthresh with
-        | true -> Int32.of_int t.tx_mss
-        | false -> max (Int32.div (Int32.of_int (t.tx_mss * t.tx_mss)) t.cwnd) 1l
-      in
-      t.cwnd <- Int32.add t.cwnd cwnd_incr
+      t.cwnd <- (Int32.add t.cwnd (Int32.of_int t.tx_mss));
     end
-end
+  end else begin
+    if Sequence.gt r t.snd_una then begin
+      t.backoff_count <- 0;
+      t.snd_una <- r;
+      if t.rtt_timer_on && Sequence.gt r t.rtt_timer_seq then begin
+        t.rtt_timer_on <- false;
+        let rtt_m = Int64.sub (Eio.Time.Mono.now t.mono |> Mtime.to_uint64_ns) t.rtt_timer_starttime in
+        if t.rtt_timer_reset then begin
+          t.rtt_timer_reset <- false;
+          t.rttvar <- Int64.div rtt_m 2L;
+          t.srtt <- rtt_m;
+        end else begin
+          let (/) = Int64.div
+          and ( * ) = Int64.mul
+          and (-) = Int64.sub
+          and (+) = Int64.add
+          in
+          (* RFC2988 2.3 *)
+          t.rttvar <- (3L * t.rttvar / 4L) + (Int64.abs (t.srtt - rtt_m) / 4L);
+          t.srtt <- (7L * t.srtt / 8L) + (rtt_m / 8L)
+        end;
+        t.rto <- max (Duration.of_ms 667) Int64.(add t.srtt (mul t.rttvar 4L));
+      end;
+    end;
+    let cwnd_incr = match t.cwnd < t.ssthresh with
+      | true -> Int32.of_int t.tx_mss
+      | false -> max (Int32.div (Int32.of_int (t.tx_mss * t.tx_mss)) t.cwnd) 1l
+    in
+    t.cwnd <- Int32.add t.cwnd cwnd_incr
+  end
 
 let tx_nxt t = t.tx_nxt
 let tx_wnd t = t.tx_wnd
