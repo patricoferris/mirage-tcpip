@@ -66,7 +66,7 @@ module Tx : sig
 
   val create:
     sw:Eio.Switch.t -> 
-    mono:Eio.Time.Mono.t ->
+    (* mono:Eio.Time.Mono.t -> *)
     clock:Eio.Time.clock -> 
     xmit:xmit -> wnd:Window.t -> state:State.t ->
     rx_ack:Sequence.t Eio.Stream.t ->

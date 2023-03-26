@@ -17,5 +17,9 @@
 module Make (IP : Tcpip.Ip.S) : sig
   include Tcpip.Tcp.S with type ipaddr = IP.ipaddr
 
-  val connect : sw:Eio.Switch.t -> mono:Eio.Time.Mono.t -> clock:Eio.Time.clock -> IP.t -> t
+  val connect : 
+    sw:Eio.Switch.t ->
+    mono:Eio.Time.Mono.t ->
+    random:Eio.Flow.source ->
+    clock:Eio.Time.clock -> IP.t -> t
 end

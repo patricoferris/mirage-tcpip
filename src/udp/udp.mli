@@ -16,5 +16,5 @@
 
 module Make (IP : Tcpip.Ip.S) : sig
   include Tcpip.Udp.S with type ipaddr = IP.ipaddr
-  val connect : IP.t -> t
+  val connect : random:Eio.Flow.source -> IP.t -> t
 end

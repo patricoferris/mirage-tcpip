@@ -14,7 +14,7 @@ module Keepalive: sig
   (** Configuration for TCP keep-alives *)
 end
 
-exception Refused 
+exception Refused
 exception Timeout
 
 (** Transmission Control Protocol layer: reliable ordered streaming

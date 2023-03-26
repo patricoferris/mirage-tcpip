@@ -20,7 +20,7 @@ module Log = (val Logs.src_log src : Logs.LOG)
 
 module Make
     (Random : Mirage_random.S)
-    (etif : Mirage_net.S)
+    (Netif : Mirage_net.S)
     (Eth : Ethernet.S)
     (Arpv4 : Arp.S)
     (Ipv4 : Tcpip.Ip.S with type ipaddr = Ipaddr.V4.t)
@@ -81,7 +81,7 @@ struct
     let t = { netif; ethif; arpv4; ipv4; icmpv4; tcpv4; udpv4; cancel } in
     Log.info (fun f -> f "stack assembled: %a" pp t);
     Eio.Fiber.fork ~sw (fun () ->
-        Eio.Fiber.first ~label:"tcpip.stack-direct.listen"
+        Eio.Fiber.first
           (fun () -> listen t)
           (fun () -> Eio.Promise.await cancel_promise));
     t
@@ -148,7 +148,7 @@ struct
     let t = { netif; ethif; ipv6; tcpv6; udpv6; cancel } in
     Log.info (fun f -> f "stack assembled: %a" pp t);
     Eio.Fiber.fork ~sw (fun () ->
-        Eio.Fiber.first ~label:"tcpip.stack-direct.listen"
+        Eio.Fiber.first
           (fun () -> listen t)
           (fun () -> Eio.Promise.await cancel_promise));
     t
@@ -328,7 +328,7 @@ struct
     let t = { netif; ethif; arpv4; ip; icmpv4; tcp; udp; cancel } in
     Log.info (fun f -> f "stack assembled: %a" pp t);
     Eio.Fiber.fork ~sw (fun () ->
-        Eio.Fiber.first ~label:"tcpip.stack-direct.listen"
+        Eio.Fiber.first
           (fun () -> listen t)
           (fun () -> Eio.Promise.await cancel_promise));
     t

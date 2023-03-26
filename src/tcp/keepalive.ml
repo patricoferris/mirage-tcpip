@@ -49,53 +49,54 @@ let next ~configuration ~ns state =
       end
   end
 
-  module Make(Clock:Mirage_clock.MCLOCK) = struct
-    type t = {
-      configuration: Tcpip.Tcp.Keepalive.t;
-      callback: ([ `SendProbe | `Close ] -> unit);
-      clock: Eio.Time.clock;
-      mutable state: state;
-      mutable cancel: unit Eio.Promise.u;
-      mutable start: int64;
-    }
-    (** A keep-alive timer *)
+type t = {
+  configuration: Tcpip.Tcp.Keepalive.t;
+  callback: ([ `SendProbe | `Close ] -> unit);
+  mono: Eio.Time.Mono.t;
+  clock: Eio.Time.clock;
+  mutable state: state;
+  mutable cancel: unit Eio.Promise.u;
+  mutable start: int64;
+}
+(** A keep-alive timer *)
 
-    let rec restart t =
-      let ns = Int64.sub (Clock.elapsed_ns ()) t.start in
-      match next ~configuration:t.configuration ~ns t.state with
-      | `Wait ns, state ->
-        Eio.Time.sleep t.clock (Int64.to_float ns /. 1_000_000_000.);
-        t.state <- state;
-        restart t
-      | `SendProbe, state ->
-        t.callback `SendProbe;
-        t.state <- state;
-        restart t
-      | `Close, _ ->
-        t.callback `Close;
-        ()
+let elapsed_ns mono = Eio.Time.Mono.now mono |> Mtime.to_uint64_ns
 
-    let create ~sw ~clock configuration callback =
-      let state = alive in
-      let start = Clock.elapsed_ns () in
-      let promise_cancel, cancel = Eio.Promise.create ~label:"keepalive" () in
-      let t = { configuration; callback; state; cancel; clock; start } in
-      Eio.Fiber.fork ~sw (fun () ->
-        Eio.Fiber.any ~label:"tcp.keepalive.create" [
-          (fun () -> Eio.Promise.await promise_cancel);
-          (fun () -> restart t)
-        ]);
-      t
+let rec restart t =
+  let ns = Int64.sub (elapsed_ns t.mono) t.start in
+  match next ~configuration:t.configuration ~ns t.state with
+  | `Wait ns, state ->
+    Eio.Time.sleep t.clock (Int64.to_float ns /. 1_000_000_000.);
+    t.state <- state;
+    restart t
+  | `SendProbe, state ->
+    t.callback `SendProbe;
+    t.state <- state;
+    restart t
+  | `Close, _ ->
+    t.callback `Close;
+    ()
 
-    let refresh ~sw t =
-      t.start <- Clock.elapsed_ns ();
-      t.state <- alive;
-      let promise_cancel, cancel = Eio.Promise.create ~label:"keepalive" () in
-      t.cancel <- cancel;
-      Eio.Promise.resolve t.cancel ();
-      Eio.Fiber.fork ~sw (fun () ->
-        Eio.Fiber.any ~label:"tcp.keepalive.refresh" [
-          (fun () -> Eio.Promise.await promise_cancel);
-          (fun () -> restart t)
-        ])
-  end
+let create ~sw ~mono ~clock configuration callback =
+  let state = alive in
+  let start = (elapsed_ns mono) in
+  let promise_cancel, cancel = Eio.Promise.create ~label:"keepalive" () in
+  let t = { configuration; mono; callback; state; cancel; clock; start } in
+  Eio.Fiber.fork ~sw (fun () ->
+    Eio.Fiber.any [
+      (fun () -> Eio.Promise.await promise_cancel);
+      (fun () -> restart t)
+    ]);
+  t
+
+let refresh ~sw t =
+  t.start <- (elapsed_ns t.mono);
+  t.state <- alive;
+  let promise_cancel, cancel = Eio.Promise.create ~label:"keepalive" () in
+  t.cancel <- cancel;
+  Eio.Promise.resolve t.cancel ();
+  Eio.Fiber.fork ~sw (fun () ->
+    Eio.Fiber.any [
+      (fun () -> Eio.Promise.await promise_cancel);
+      (fun () -> restart t)
+    ])

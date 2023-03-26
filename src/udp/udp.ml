@@ -25,6 +25,7 @@ module Make (Ip : Tcpip.Ip.S) = struct
 
   type t = {
     ip : Ip.t;
+    random : Eio.Flow.source;
     listeners : (int, callback) Hashtbl.t;
   }
 
@@ -51,11 +52,11 @@ module Make (Ip : Tcpip.Ip.S) = struct
       | None    -> ()
       | Some fn -> fn ~src ~dst ~src_port payload
 
-  let writev ~random ?src ?src_port ?ttl ~dst ~dst_port t bufs =
+  let writev ?src ?src_port ?ttl ~dst ~dst_port t bufs =
     let src_port = match src_port with
       | None   -> 
         let buf = Cstruct.create 2 in
-        Eio.Flow.read_exact random buf;
+        Eio.Flow.read_exact t.random buf;
         Cstruct.LE.get_uint16 buf 0
       | Some p -> p
     in
@@ -81,9 +82,9 @@ module Make (Ip : Tcpip.Ip.S) = struct
   let write ?src ?src_port ?ttl ~dst ~dst_port t buf =
     writev ?src ?src_port ?ttl ~dst ~dst_port t [buf]
 
-  let connect ip =
+  let connect ~random ip =
     Log.info (fun f -> f "UDP interface connected on %a" (Fmt.list Ip.pp_ipaddr) @@ Ip.get_ip ip);
-    { ip ; listeners = Hashtbl.create 7 }
+    { ip ; random; listeners = Hashtbl.create 7 }
 
   let disconnect t =
     Log.info (fun f -> f "UDP interface disconnected on %a" (Fmt.list Ip.pp_ipaddr) @@ Ip.get_ip t.ip)

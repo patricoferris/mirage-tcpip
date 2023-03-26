@@ -26,6 +26,8 @@ module Make (Ethernet: Ethernet.S) (Arpv4 : Arp.S) = struct
   let pp_ipaddr = Ipaddr.V4.pp
 
   type t = {
+    mono : Eio.Time.Mono.t;
+    random : Eio.Flow.source;
     ethif : Ethernet.t;
     arp : Arpv4.t;
     cidr: Ipaddr.V4.Prefix.t;
@@ -33,7 +35,7 @@ module Make (Ethernet: Ethernet.S) (Arpv4 : Arp.S) = struct
     mutable cache: Fragments.Cache.t;
   }
 
-  let write ~random t ?(fragment = true) ?(ttl = 38) ?src dst proto ?(size = 0) headerf bufs =
+  let write t ?(fragment = true) ?(ttl = 38) ?src dst proto ?(size = 0) headerf bufs =
     match Routes.destination_mac t.cidr t.gateway t.arp dst with
     | exception Routing.Local ->
       Log.warn (fun f -> f "Could not find %a on the local network" Ipaddr.V4.pp dst);
@@ -66,7 +68,7 @@ module Make (Ethernet: Ethernet.S) (Arpv4 : Arp.S) = struct
           let src = match src with None -> Ipaddr.V4.Prefix.address t.cidr | Some x -> x in
           let r = 
             let buf = Cstruct.create 2 in 
-            Eio.Flow.read_exact random buf;
+            Eio.Flow.read_exact t.random buf;
             Cstruct.LE.get_uint16 buf 0
           in
           let id = if multiple then r else 0 in
@@ -118,7 +120,7 @@ module Make (Ethernet: Ethernet.S) (Arpv4 : Arp.S) = struct
           let remaining = Fragments.fragment ~mtu hdr !leftover in
           List.iter (Ethernet.writev t.ethif mac `IPv4) remaining
 
-  let input ~mono t ~tcp ~udp ~default buf =
+  let input t ~tcp ~udp ~default buf =
     match Ipv4_packet.Unmarshal.of_cstruct buf with
     | Error s ->
       Log.info (fun m -> m "error %s while parsing IPv4 frame %a" s Cstruct.hexdump_pp buf)
@@ -134,7 +136,7 @@ module Make (Ethernet: Ethernet.S) (Arpv4 : Arp.S) = struct
       end else if Cstruct.length payload = 0 then begin
         Log.debug (fun m -> m "dropping zero length IPv4 frame %a" Ipv4_packet.pp packet)
       end else
-        let ts = Eio.Time.Mono.now mono |> Mtime.to_uint64_ns in
+        let ts = Eio.Time.Mono.now t.mono |> Mtime.to_uint64_ns in
         let cache, res = Fragments.process t.cache ts packet payload in
         t.cache <- cache ;
         match res with
@@ -148,13 +150,13 @@ module Make (Ethernet: Ethernet.S) (Arpv4 : Arp.S) = struct
           | Some `ICMP | None -> default ~proto:packet.proto ~src ~dst payload
 
   let connect
-      ?(no_init = false) ~cidr ?gateway ?(fragment_cache_size = 1024 * 256) ethif arp =
+      ?(no_init = false) ~mono ~random ~cidr ?gateway ?(fragment_cache_size = 1024 * 256) ethif arp =
     (if no_init then
        ()
      else
        Arpv4.set_ips arp [Ipaddr.V4.Prefix.address cidr]);
     let cache = Fragments.Cache.empty fragment_cache_size in
-    { ethif; arp; cidr; gateway; cache }
+    { mono; random; ethif; arp; cidr; gateway; cache }
 
   let disconnect _ = ()
 

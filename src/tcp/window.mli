@@ -18,7 +18,7 @@ type t
 
 val pp: Format.formatter -> t -> unit
 
-val t : rx_wnd_scale:int -> tx_wnd_scale:int -> rx_wnd:int ->
+val t : mono:Eio.Time.Mono.t -> rx_wnd_scale:int -> tx_wnd_scale:int -> rx_wnd:int ->
   tx_wnd:int -> rx_isn:Sequence.t -> tx_mss:int -> tx_isn:Sequence.t -> t
 
 val valid : t -> Sequence.t -> bool
@@ -28,10 +28,8 @@ val rx_advance_inseq : t -> Sequence.t -> unit
 val rx_nxt : t -> Sequence.t
 val rx_nxt_inseq : t -> Sequence.t
 
-module W : sig
-  val tx_advance : t -> Sequence.t -> unit
-  val tx_ack: t -> Sequence.t -> int -> unit
-end
+val tx_advance : t -> Sequence.t -> unit
+val tx_ack: t -> Sequence.t -> int -> unit
 
 val tx_nxt : t -> Sequence.t
 val tx_una : t -> Sequence.t
